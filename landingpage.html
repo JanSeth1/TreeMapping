@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TIMS Landing Page</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main>
+    <section class="section">
+      <h1>TIMS: Smarter Tree Mapping for Greener Cities</h1>
+      <p>
+        Real-time tree inventory management to power zoning, planning, and green cover decisions for urban agencies.
+      </p>
+      <div class="buttons">
+        <a href="map.html" class="btn-primary">Book a Demo</a>
+        <a href="admin.html" class="btn-secondary" id="adminLink" style="display:none;">Admin Panel</a>
+      </div>
+    </section>
+
+    <section class="features">
+      <div class="feature-card">
+        <h3>Reliable Tree Inventory</h3>
+        <p>Access a living map of every tree in your jurisdiction—accurate, searchable, and updated.</p>
+      </div>
+      <div class="feature-card">
+        <h3>Real-Time Spatial Overlays</h3>
+        <p>Monitor ecologically sensitive zones and make smarter development decisions.</p>
+      </div>
+      <div class="feature-card">
+        <h3>Efficient Planning</h3>
+        <p>Support zoning and infrastructure projects with reliable green asset data.</p>
+      </div>
+    </section>
+
+    <section class="why-section">
+      <h2>Why TIMS?</h2>
+      <p>
+        Urban and peri-urban agencies often lack basic green asset data. TIMS bridges that gap with a powerful, easy-to-use platform that supports sustainability and smart development.
+      </p>
+    </section>
+
+    <footer>
+      <p>Contact us at <a href="mailto:info@tims.city">info@tims.city</a></p>
+      <p>&copy; 2025 TIMS Solutions</p>
+    </footer>
+  </main>
+</body>
+</html>
+// Show admin link if user is admin
+if (localStorage.getItem('userType') === 'admin') {
+  document.getElementById('adminLink').style.display = 'inline-block';
+}
+</script>

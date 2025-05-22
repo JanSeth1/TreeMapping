@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Login - TIMS</title>
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #f5f5f5;
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    main {
+      width: 100%;
+      max-width: 400px;
+      padding: 2rem;
+    }
+    .section {
+      background-color: white;
+      padding: 2.5rem;
+      border-radius: 1rem;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    h1 {
+      color: #1f2937;
+      text-align: center;
+      margin-bottom: 1.5rem;
+      font-size: 2rem;
+    }
+    #loginForm {
+      display: flex;
+      flex-direction: column;
+      gap: 1.2rem;
+    }
+    .form-group {
+      position: relative;
+    }
+    input {
+      width: 100%;
+      padding: 0.75rem 1rem;
+      border-radius: 0.5rem;
+      border: 1px solid #e5e7eb;
+      font-size: 1rem;
+      transition: border-color 0.2s ease;
+      box-sizing: border-box;
+    }
+    input:focus {
+      outline: none;
+      border-color: #0a8806;
+      box-shadow: 0 0 0 2px rgba(10, 136, 6, 0.1);
+    }
+    .error-text {
+      color: #b91c1c;
+      font-size: 0.875rem;
+      margin-top: 0.25rem;
+      display: none;
+    }
+    .btn-primary {
+      background-color: #0a8806;
+      color: white;
+      padding: 0.75rem;
+      border: none;
+      border-radius: 0.5rem;  
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background-color 0.2s ease;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .btn-primary:hover {
+      background-color: #097306;
+    }
+    .btn-primary:disabled {
+      background-color: #9ca3af;
+      cursor: not-allowed;
+    }
+    .btn-secondary {
+      display: inline-block;
+      background-color: #f3f4f6;
+      color: #374151;
+      padding: 0.75rem 1.5rem;
+      border-radius: 0.5rem;
+      font-weight: 500;
+      transition: background-color 0.2s ease;
+      text-decoration: none;
+    }
+    .btn-secondary:hover {
+      background-color: #e5e7eb;
+    }
+    #loginMsg {
+      margin-top: 1rem;
+      padding: 0.75rem;
+      border-radius: 0.5rem;
+      font-weight: 500;
+      text-align: center;
+      display: none;
+    }
+    .error {
+      background-color: #fee2e2;
+      color: #b91c1c;
+    }
+    .success {
+      background-color: #dcfce7;
+      color: #166534;
+    }
+    .register-link {
+      text-align: center;
+      margin-top: 2rem;
+    }
+    .spinner {
+      display: none;
+      width: 20px;
+      height: 20px;
+      margin-right: 8px;
+      border: 3px solid #ffffff;
+      border-top: 3px solid transparent;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="section">
+      <h1>Login to TIMS</h1>
+      <form id="loginForm" novalidate>
+        <div class="form-group">
+          <input 
+            type="text" 
+            id="username" 
+            name="username"
+            placeholder="Username" 
+            required
+            minlength="3"
+            autocomplete="username"
+          >
+          <div class="error-text" id="usernameError"></div>
+        </div>
+        <div class="form-group">
+          <input 
+            type="password" 
+            id="password" 
+            name="password"
+            placeholder="Password" 
+            required
+            autocomplete="current-password"
+          >
+          <div class="error-text" id="passwordError"></div>
+        </div>
+        <button type="submit" class="btn-primary">
+          <div class="spinner" id="loginSpinner"></div>
+          <span>Login</span>
+        </button>
+      </form>
+      <div id="loginMsg"></div>
+      <div class="register-link">
+        <a href="register.html" class="btn-secondary">Register</a>
+      </div>
+    </section>
+  </main>
+  <script>
+    // Clear any existing auth data on login page load
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('user_id');
+    localStorage.removeItem('userType');
+
+    const loginForm = document.getElementById('loginForm');
+    const loginMsg = document.getElementById('loginMsg');
+    const loginSpinner = document.getElementById('loginSpinner');
+    const submitButton = loginForm.querySelector('button[type="submit"]');
+    let isSubmitting = false;
+
+    // Input validation
+    function validateInput(input) {
+      const errorElement = document.getElementById(`${input.id}Error`);
+      
+      if (!input.value) {
+        errorElement.textContent = `${input.id.charAt(0).toUpperCase() + input.id.slice(1)} is required`;
+        errorElement.style.display = 'block';
+        return false;
+      }
+      
+      if (input.id === 'username' && input.minLength && input.value.length < input.minLength) {
+        errorElement.textContent = `${input.id.charAt(0).toUpperCase() + input.id.slice(1)} must be at least ${input.minLength} characters`;
+        errorElement.style.display = 'block';
+        return false;
+      }
+      
+      errorElement.style.display = 'none';
+      return true;
+    }
+
+    // Add input validation listeners
+    ['username', 'password'].forEach(id => {
+      const input = document.getElementById(id);
+      input.addEventListener('input', () => validateInput(input));
+      input.addEventListener('blur', () => validateInput(input));
+    });
+
+    loginForm.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      
+      if (isSubmitting) return;
+      
+      // Validate all inputs
+      const username = document.getElementById('username');
+      const password = document.getElementById('password');
+      
+      const isUsernameValid = validateInput(username);
+      const isPasswordValid = validateInput(password);
+      
+      if (!isUsernameValid || !isPasswordValid) {
+        return;
+      }
+      
+      // Start loading state
+      isSubmitting = true;
+      submitButton.disabled = true;
+      loginSpinner.style.display = 'block';
+      loginMsg.style.display = 'none';
+      
+      try {
+        const response = await fetch('login.php', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            username: username.value.trim(),
+            password: password.value
+          })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          // Show success message briefly
+          loginMsg.textContent = 'Login successful! Redirecting...';
+          loginMsg.className = 'success';
+          loginMsg.style.display = 'block';
+          
+          // Store authentication data
+          localStorage.setItem('user_id', data.data.user_id);
+          localStorage.setItem('userType', data.data.role);
+          localStorage.setItem('authToken', data.data.auth_token);
+          
+          // Redirect after a short delay
+          setTimeout(() => {
+            window.location.href = data.data.role === 'admin' ? 'admin.html' : 'map.html';
+          }, 500);
+        } else {
+          loginMsg.textContent = data.message || 'Invalid username or password';
+          loginMsg.className = 'error';
+          loginMsg.style.display = 'block';
+          
+          // Clear password field on error
+          password.value = '';
+        }
+      } catch (error) {
+        console.error('Login error:', error);
+        loginMsg.textContent = 'Network error. Please check your connection and try again.';
+        loginMsg.className = 'error';
+        loginMsg.style.display = 'block';
+      } finally {
+        isSubmitting = false;
+        submitButton.disabled = false;
+        loginSpinner.style.display = 'none';
+      }
+    });
+
+    // Check for redirect message
+    const urlParams = new URLSearchParams(window.location.search);
+    const message = urlParams.get('message');
+    if (message) {
+      loginMsg.textContent = decodeURIComponent(message);
+      loginMsg.className = urlParams.get('type') === 'success' ? 'success' : 'error';
+      loginMsg.style.display = 'block';
+    }
+  </script>
+</body>
+</html>

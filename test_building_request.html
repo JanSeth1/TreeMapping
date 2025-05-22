@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Building Request Form</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        
+        h1, h2 {
+            color: #0a8806;
+        }
+        
+        .card {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #333;
+        }
+        
+        input, select, textarea {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        
+        button {
+            background-color: #0a8806;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            font-size: 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        
+        button:hover {
+            background-color: #097205;
+        }
+        
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .status {
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 6px;
+        }
+        
+        .status.success {
+            background-color: #dff0d8;
+            color: #3c763d;
+        }
+        
+        .status.error {
+            background-color: #f2dede;
+            color: #a94442;
+        }
+        
+        .status.warning {
+            background-color: #fcf8e3;
+            color: #8a6d3b;
+        }
+        
+        .status.in-progress {
+            background-color: #d9edf7;
+            color: #31708f;
+        }
+        
+        .coordinates-container {
+            border: 1px solid #ddd;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+        
+        .coordinates-field {
+            display: flex;
+            margin-bottom: 10px;
+        }
+        
+        .coordinates-field input {
+            width: 45%;
+            margin-right: 10px;
+            margin-bottom: 0;
+        }
+        
+        .result {
+            background-color: #f5f5f5;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px;
+            margin-top: 15px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <h1>Test Building Request Submission</h1>
+    
+    <div class="card">
+        <h2>Building Request Form</h2>
+        <form id="buildingRequestForm">
+            <label for="user_id">User ID:</label>
+            <input type="text" id="user_id" name="user_id" value="test123" required>
+            
+            <label for="area_id">Area ID:</label>
+            <input type="number" id="area_id" name="area_id" value="1" required>
+            
+            <label for="structure_type">Structure Type:</label>
+            <select id="structure_type" name="structure_type" required>
+                <option value="House">House</option>
+                <option value="Commercial Building">Commercial Building</option>
+                <option value="Shed">Shed</option>
+                <option value="Garage">Garage</option>
+                <option value="Other">Other</option>
+            </select>
+            
+            <label for="structure_size">Structure Size (sq. meters):</label>
+            <input type="number" id="structure_size" name="structure_size" value="100" min="1" required>
+            
+            <label for="project_description">Project Description:</label>
+            <textarea id="project_description" name="project_description" rows="4"></textarea>
+            
+            <div class="coordinates-container">
+                <label>Coordinates (mock polygon):</label>
+                <div class="coordinates-field">
+                    <input type="number" step="0.0001" value="51.505" placeholder="Latitude" class="lat-input">
+                    <input type="number" step="0.0001" value="-0.09" placeholder="Longitude" class="lng-input">
+                </div>
+                <div class="coordinates-field">
+                    <input type="number" step="0.0001" value="51.51" placeholder="Latitude" class="lat-input">
+                    <input type="number" step="0.0001" value="-0.1" placeholder="Longitude" class="lng-input">
+                </div>
+                <div class="coordinates-field">
+                    <input type="number" step="0.0001" value="51.51" placeholder="Latitude" class="lat-input">
+                    <input type="number" step="0.0001" value="-0.08" placeholder="Longitude" class="lng-input">
+                </div>
+                <div class="coordinates-field">
+                    <input type="number" step="0.0001" value="51.505" placeholder="Latitude" class="lat-input">
+                    <input type="number" step="0.0001" value="-0.09" placeholder="Longitude" class="lng-input">
+                </div>
+            </div>
+            
+            <button type="submit">Submit Request</button>
+        </form>
+        
+        <div id="status" class="status" style="display: none;"></div>
+    </div>
+    
+    <div class="card">
+        <h2>Request Result</h2>
+        <div id="result" class="result">No request sent yet.</div>
+    </div>
+    
+    <script>
+        document.getElementById('buildingRequestForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            submitBuildingRequest();
+        });
+        
+        function submitBuildingRequest() {
+            const userId = document.getElementById('user_id').value;
+            const areaId = document.getElementById('area_id').value;
+            const structureType = document.getElementById('structure_type').value;
+            const structureSize = document.getElementById('structure_size').value;
+            const projectDescription = document.getElementById('project_description').value;
+            
+            // Collect coordinates from inputs
+            const coordinates = [];
+            const latInputs = document.querySelectorAll('.lat-input');
+            const lngInputs = document.querySelectorAll('.lng-input');
+            
+            for (let i = 0; i < latInputs.length; i++) {
+                const lat = parseFloat(latInputs[i].value);
+                const lng = parseFloat(lngInputs[i].value);
+                
+                if (!isNaN(lat) && !isNaN(lng)) {
+                    coordinates.push([lat, lng]);
+                }
+            }
+            
+            // Build request data
+            const requestData = {
+                user_id: userId,
+                area_id: parseInt(areaId),
+                structure_type: structureType,
+                structure_size: parseFloat(structureSize),
+                project_description: projectDescription,
+                coordinates: coordinates
+            };
+            
+            // Display status
+            const status = document.getElementById('status');
+            status.className = 'status in-progress';
+            status.textContent = 'Submitting request...';
+            status.style.display = 'block';
+            
+            // Display request data
+            document.getElementById('result').innerHTML = 'Request data:\n' + JSON.stringify(requestData, null, 2);
+            
+            // Make AJAX request
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', 'submit_building_request.php', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.setRequestHeader('Authorization', 'Bearer test123token');
+            xhr.setRequestHeader('X-User-ID', userId);
+            
+            xhr.onload = function() {
+                let responseText = xhr.responseText;
+                document.getElementById('result').innerHTML += '\n\nResponse:\n' + responseText;
+                
+                try {
+                    const response = JSON.parse(responseText);
+                    
+                    if (response.success) {
+                        status.className = 'status success';
+                        status.textContent = 'Request submitted successfully! Request ID: ' + response.request_id;
+                    } else {
+                        status.className = 'status error';
+                        status.textContent = 'Error: ' + response.message;
+                    }
+                } catch (e) {
+                    status.className = 'status error';
+                    status.textContent = 'Error parsing response. Check the console for details.';
+                    console.error('Error parsing response:', e);
+                }
+            };
+            
+            xhr.onerror = function() {
+                status.className = 'status error';
+                status.textContent = 'Network error occurred';
+                document.getElementById('result').innerHTML += '\n\nNetwork error occurred.';
+            };
+            
+            xhr.send(JSON.stringify(requestData));
+        }
+    </script>
+</body>
+</html> 

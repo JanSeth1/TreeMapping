@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Initialize Building System</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        
+        h1, h2 {
+            color: #0a8806;
+        }
+        
+        .card {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .log-container {
+            background-color: #f5f5f5;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 15px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: monospace;
+            margin-top: 20px;
+        }
+        
+        .log-entry {
+            margin: 5px 0;
+            padding: 5px;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .log-entry.error {
+            color: #d9534f;
+            background-color: #f9f2f2;
+        }
+        
+        .log-entry.success {
+            color: #5cb85c;
+        }
+        
+        button {
+            background-color: #0a8806;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            font-size: 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        
+        button:hover {
+            background-color: #097205;
+        }
+        
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 6px;
+        }
+        
+        .status.success {
+            background-color: #dff0d8;
+            color: #3c763d;
+        }
+        
+        .status.error {
+            background-color: #f2dede;
+            color: #a94442;
+        }
+        
+        .status.warning {
+            background-color: #fcf8e3;
+            color: #8a6d3b;
+        }
+        
+        .status.in-progress {
+            background-color: #d9edf7;
+            color: #31708f;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        
+        table, th, td {
+            border: 1px solid #ddd;
+        }
+        
+        th, td {
+            padding: 8px 12px;
+            text-align: left;
+        }
+        
+        th {
+            background-color: #f5f5f5;
+        }
+        
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+    </style>
+</head>
+<body>
+    <h1>Building System Initialization</h1>
+    
+    <div class="card">
+        <h2>Initialize Database</h2>
+        <p>Click the button below to check and create all necessary database tables for the Building Availability Checker system.</p>
+        <button id="initBtn">Initialize Database</button>
+        <div id="status" class="status" style="display: none;"></div>
+    </div>
+    
+    <div class="card">
+        <h2>Initialization Results</h2>
+        <div id="results" style="display: none;">
+            <h3>Database Tables</h3>
+            <div id="tableResults"></div>
+            
+            <h3>Data Counts</h3>
+            <table id="dataCounts">
+                <thead>
+                    <tr>
+                        <th>Table</th>
+                        <th>Count</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Areas</td>
+                        <td id="areaCount">-</td>
+                    </tr>
+                    <tr>
+                        <td>Requests</td>
+                        <td id="requestCount">-</td>
+                    </tr>
+                    <tr>
+                        <td>Users</td>
+                        <td id="userCount">-</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <div class="card">
+        <h2>Log</h2>
+        <div id="logContainer" class="log-container"></div>
+    </div>
+    
+    <script>
+        document.getElementById('initBtn').addEventListener('click', initializeDatabase);
+        
+        function initializeDatabase() {
+            const btn = document.getElementById('initBtn');
+            const status = document.getElementById('status');
+            const logContainer = document.getElementById('logContainer');
+            
+            btn.disabled = true;
+            status.className = 'status in-progress';
+            status.textContent = 'Initializing database...';
+            status.style.display = 'block';
+            
+            logContainer.innerHTML = '<div class="log-entry">Starting database initialization...</div>';
+            
+            // Make an AJAX request to the initialization script
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', 'initialize_building_system.php', true);
+            xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+            
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    let response;
+                    try {
+                        response = JSON.parse(xhr.responseText);
+                        console.log('Response:', response);
+                        
+                        if (response.success) {
+                            status.className = 'status success';
+                            status.textContent = 'Database initialized successfully!';
+                            
+                            // Show results
+                            document.getElementById('results').style.display = 'block';
+                            
+                            // Update data counts
+                            document.getElementById('areaCount').textContent = response.data_counts?.areas || '0';
+                            document.getElementById('requestCount').textContent = response.data_counts?.requests || '0';
+                            document.getElementById('userCount').textContent = response.data_counts?.users || '0';
+                            
+                            // Display table results
+                            let tableResultsHTML = '';
+                            
+                            if (response.tables_created && response.tables_created.length > 0) {
+                                tableResultsHTML += '<p><strong>Tables created:</strong> ' + response.tables_created.join(', ') + '</p>';
+                            }
+                            
+                            if (response.tables_modified && response.tables_modified.length > 0) {
+                                tableResultsHTML += '<p><strong>Tables modified:</strong> ' + response.tables_modified.join(', ') + '</p>';
+                            }
+                            
+                            if (tableResultsHTML === '') {
+                                tableResultsHTML = '<p>No tables needed to be created or modified.</p>';
+                            }
+                            
+                            document.getElementById('tableResults').innerHTML = tableResultsHTML;
+                        } else {
+                            status.className = 'status error';
+                            status.textContent = 'Error: ' + response.message;
+                        }
+                        
+                        // Display logs
+                        if (response.logs && response.logs.length > 0) {
+                            const logHTML = response.logs.map(log => 
+                                `<div class="log-entry">${log}</div>`
+                            ).join('');
+                            
+                            logContainer.innerHTML = logHTML;
+                        }
+                        
+                        // Display errors
+                        if (response.errors && response.errors.length > 0) {
+                            const errorHTML = response.errors.map(error => 
+                                `<div class="log-entry error">${error}</div>`
+                            ).join('');
+                            
+                            logContainer.innerHTML += errorHTML;
+                        }
+                        
+                    } catch (e) {
+                        console.error('Error parsing response:', e);
+                        status.className = 'status error';
+                        status.textContent = 'Error parsing server response';
+                        logContainer.innerHTML += `<div class="log-entry error">Error parsing response: ${e.message}</div>`;
+                        logContainer.innerHTML += `<div class="log-entry error">Raw response: ${xhr.responseText}</div>`;
+                    }
+                } else {
+                    status.className = 'status error';
+                    status.textContent = 'Error: Server returned ' + xhr.status;
+                    logContainer.innerHTML += `<div class="log-entry error">Server error: ${xhr.status} ${xhr.statusText}</div>`;
+                }
+                
+                // Re-enable the button
+                btn.disabled = false;
+            };
+            
+            xhr.onerror = function() {
+                status.className = 'status error';
+                status.textContent = 'Network error occurred';
+                logContainer.innerHTML += '<div class="log-entry error">Network error occurred. Check your connection.</div>';
+                btn.disabled = false;
+            };
+            
+            xhr.send();
+        }
+    </script>
+</body>
+</html> 

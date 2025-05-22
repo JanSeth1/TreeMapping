@@ -1,0 +1,3899 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Location Management - TIMS</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css"/>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
+  <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+  <script>
+    // Check authentication on page load
+    function checkAuth() {
+      const authToken = localStorage.getItem('authToken');
+      const userId = localStorage.getItem('user_id');
+      
+      if (!authToken || !userId) {
+        window.location.href = 'index.html';
+        return false;
+      }
+      return true;
+    }
+
+    // Add authentication headers to fetch requests
+    async function authenticatedFetch(url, options = {}) {
+      const authToken = localStorage.getItem('authToken');
+      const userId = localStorage.getItem('user_id');
+      
+      if (!authToken || !userId) {
+        window.location.href = 'index.html';
+        throw new Error('Not authenticated');
+      }
+
+      const headers = {
+        'Authorization': `Bearer ${authToken}`,
+        'X-User-ID': userId,
+        ...(options.headers || {})
+      };
+
+      const response = await fetch(url, {
+        ...options,
+        headers
+      });
+
+      if (response.status === 401) {
+        // Clear invalid credentials and redirect to login
+        localStorage.removeItem('authToken');
+        localStorage.removeItem('user_id');
+        localStorage.removeItem('userType');
+        window.location.href = 'index.html';
+        throw new Error('Authentication failed');
+      }
+
+      return response;
+    }
+
+    // Check authentication on page load
+    document.addEventListener('DOMContentLoaded', checkAuth);
+  </script>
+  <style>
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+    .map-container {
+      width: 100%;
+      height: 500px;
+      border: 2px solid #0a8806;
+      border-radius: 1rem;
+      overflow: hidden;
+      display: none; /* Initially hidden */
+      position: relative; /* Add position relative */
+      min-height: 500px; /* Ensure minimum height */
+    }
+    #map {
+      width: 100% !important;
+      height: 100% !important;
+      position: absolute !important;
+      top: 0;
+      left: 0;
+    }
+    .enrolled-areas {
+      margin-top: 2rem;
+    }
+    .area-card {
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      margin-bottom: 1rem;
+      padding: 1rem;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+    .area-card:hover {
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      border-color: #0a8806;
+    }
+    .area-card.active {
+      border-color: #0a8806;
+      background-color: #f0f9f0;
+    }
+    .area-map {
+      height: 200px;
+      margin-top: 1rem;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .btn-enroll {
+      background: #0a8806;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 2rem;
+    }
+    .btn-enroll:hover {
+      background: #097205;
+    }
+    .drawing-instructions {
+      display: none;
+      text-align: center;
+      color: #0a8806;
+      margin: 1rem 0;
+      padding: 1rem;
+      background: #f0f9f0;
+      border-radius: 4px;
+    }
+    .btn-save {
+      display: none;
+      background: #0a8806;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      margin: 1rem 0;
+    }
+    .btn-cancel {
+      display: none;
+      background: #666;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      margin: 1rem 0;
+      margin-left: 1rem;
+    }
+    .btn-cancel:hover {
+      background: #555;
+    }
+    .map-actions {
+      display: flex;
+      justify-content: flex-start;
+      align-items: center;
+      margin: 1rem 0;
+      z-index: 100; /* Ensure container is above map */
+      position: relative; /* Enable z-index */
+    }
+    .no-areas {
+      text-align: center;
+      padding: 2rem;
+      color: #666;
+      font-style: italic;
+    }
+    .tree-marker {
+      background-color: #0a8806;
+      border: 2px solid white;
+      border-radius: 50%;
+      width: 12px;
+      height: 12px;
+      box-shadow: 0 0 4px rgba(0,0,0,0.3);
+    }
+    .area-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+
+    .area-list-item {
+      display: flex;
+      align-items: center;
+      padding: 1rem;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      margin-bottom: 1rem;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+
+    .area-list-item:hover {
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      border-color: #0a8806;
+    }
+
+    .area-list-item.active {
+      border-color: #0a8806;
+      background-color: #f0f9f0;
+    }
+
+    .area-info {
+      flex-grow: 1;
+    }
+
+    .area-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #333;
+      margin: 0 0 0.5rem 0;
+    }
+
+    .area-date {
+      font-size: 0.9rem;
+      color: #666;
+    }
+
+    .btn-view-details {
+      background: #0a8806;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+
+    .btn-view-details:hover {
+      background: #097205;
+    }
+
+    /* Modal styles */
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 1000;
+    }
+
+    .modal-content {
+      position: relative;
+      background: white;
+      width: 90%;
+      max-width: 1000px;
+      margin: 2rem auto;
+      padding: 2rem;
+      border-radius: 8px;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+
+    .close-modal {
+      position: absolute;
+      top: 1rem;
+      right: 1rem;
+      font-size: 1.5rem;
+      cursor: pointer;
+      color: #666;
+    }
+
+    .close-modal:hover {
+      color: #333;
+    }
+
+    .modal-map {
+      height: 400px;
+      margin: 1rem 0;
+      border-radius: 8px;
+      border: 2px solid #0a8806;
+    }
+
+    .area-stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      margin: 1rem 0;
+    }
+
+    .stat-card {
+      background: #f8f9fa;
+      padding: 1rem;
+      border-radius: 8px;
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 1.5rem;
+      font-weight: 600;
+      color: #0a8806;
+      margin: 0.5rem 0;
+    }
+
+    .stat-label {
+      font-size: 0.9rem;
+      color: #666;
+    }
+
+    .tree-list {
+      margin-top: 1rem;
+    }
+
+    .tree-list-title {
+      font-size: 1.2rem;
+      margin-bottom: 1rem;
+    }
+
+    .tree-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+      gap: 1rem;
+    }
+
+    .tree-card {
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      margin-bottom: 1rem;
+      padding: 1rem;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+    
+    .tree-card:hover {
+      border-color: #0a8806;
+      background-color: #f0f9f0;
+    }
+    
+    .tree-card.active {
+      border-color: #0a8806;
+      background-color: #f0f9f0;
+    }
+    
+    .tree-details {
+      display: none;
+      margin-top: 1rem;
+      padding: 1rem;
+      background: #f8f9fa;
+      border-radius: 8px;
+    }
+    
+    .tree-details.show {
+      display: block;
+    }
+    
+    .tree-detail-item {
+      padding: 0.5rem;
+      border-bottom: 1px solid #eee;
+    }
+    
+    .tree-detail-item:last-child {
+      border-bottom: none;
+    }
+    
+    .back-to-types {
+      display: none;
+      background: #0a8806;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-bottom: 1rem;
+    }
+    
+    .back-to-types:hover {
+      background: #097205;
+    }
+
+    .user-location-dot {
+      background: transparent;
+    }
+    .pulse {
+      width: 20px;
+      height: 20px;
+      background: #0a8806;
+      border-radius: 50%;
+      position: relative;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+    .pulse:after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      border-radius: 50%;
+      border: 2px solid #0a8806;
+      animation: pulse-ring 1.5s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0% {
+        transform: scale(0.5);
+      }
+      50% {
+        transform: scale(1);
+      }
+      100% {
+        transform: scale(0.5);
+      }
+    }
+    @keyframes pulse-ring {
+      0% {
+        transform: scale(0.3);
+        opacity: 0.8;
+      }
+      100% {
+        transform: scale(2);
+        opacity: 0;
+      }
+    }
+
+    /* Loading Spinner Styles */
+    .loading-container {
+      display: none;
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(255, 255, 255, 0.9);
+      z-index: 1000;
+      justify-content: center;
+      align-items: center;
+      flex-direction: column;
+    }
+    
+    .loading-spinner {
+      width: 50px;
+      height: 50px;
+      border: 5px solid #f3f3f3;
+      border-top: 5px solid #0a8806;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    
+    .loading-text {
+      margin-top: 1rem;
+      color: #0a8806;
+      font-weight: 600;
+      font-size: 1.1rem;
+    }
+    
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .filter-container {
+      display: flex;
+      align-items: center;
+      margin-bottom: 1rem;
+      padding: 0.5rem;
+      background: #f8f9fa;
+      border-radius: 4px;
+    }
+
+    .toggle-switch {
+      position: relative;
+      display: inline-block;
+      width: 60px;
+      height: 34px;
+      margin-left: 1rem;
+    }
+
+    .toggle-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #ccc;
+      transition: .4s;
+      border-radius: 34px;
+    }
+
+    .toggle-slider:before {
+      position: absolute;
+      content: "";
+      height: 26px;
+      width: 26px;
+      left: 4px;
+      bottom: 4px;
+      background-color: white;
+      transition: .4s;
+      border-radius: 50%;
+    }
+
+    input:checked + .toggle-slider {
+      background-color: #0a8806;
+    }
+
+    input:checked + .toggle-slider:before {
+      transform: translateX(26px);
+    }
+
+    .endemic-badge {
+      background-color: #0a8806;
+      color: white;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.8em;
+      margin-left: 0.5rem;
+    }
+
+    .tree-card.endemic {
+      border-left: 4px solid #0a8806;
+      background-color: #f0f9f0;
+    }
+
+    .tree-type {
+      font-weight: 600;
+      color: #333;
+      display: flex;
+      align-items: center;
+      margin-bottom: 0.5rem;
+    }
+
+    /* Weather control styles */
+    .weather-control {
+      background: white;
+      padding: 10px;
+      border-radius: 4px;
+      box-shadow: 0 1px 5px rgba(0,0,0,0.4);
+      margin-bottom: 10px;
+    }
+    
+    .weather-icon {
+      width: 50px;
+      height: 50px;
+      margin-right: 10px;
+      vertical-align: middle;
+    }
+    
+    .weather-info {
+      display: flex;
+      align-items: center;
+      margin-bottom: 5px;
+    }
+    
+    .weather-details {
+      font-size: 0.9rem;
+      color: #333;
+    }
+    
+    .weather-temp {
+      font-size: 1.2rem;
+      font-weight: 600;
+      color: #0a8806;
+    }
+    
+    .weather-description {
+      text-transform: capitalize;
+    }
+    
+    .weather-refresh {
+      background: #0a8806;
+      color: white;
+      border: none;
+      padding: 5px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      margin-top: 5px;
+    }
+    
+    .weather-refresh:hover {
+      background: #097205;
+    }
+    
+    .weather-options {
+      margin-top: 10px;
+    }
+    
+    .weather-toggle {
+      margin-right: 10px;
+    }
+
+    /* Building Availability Checker Styles */
+    .btn-check-availability {
+      background: #0a8806;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      margin-left: 0.5rem;
+    }
+
+    .btn-check-availability:hover {
+      background: #097205;
+    }
+
+    .building-instructions {
+      display: none;
+      text-align: center;
+      color: #0a8806;
+      margin: 1rem 0;
+      padding: 1rem;
+      background: #f0f9f0;
+      border-radius: 4px;
+    }
+
+    .btn-confirm-location {
+      display: none;
+      background: #0a8806;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      margin: 1rem 0;
+    }
+
+    .building-result {
+      margin-top: 1rem;
+      padding: 1rem;
+      border-radius: 4px;
+      display: none;
+    }
+
+    .result-allowed {
+      background-color: #f0f9f0;
+      border: 1px solid #0a8806;
+    }
+
+    .result-warning {
+      background-color: #fff9e6;
+      border: 1px solid #ffc107;
+    }
+
+    .result-denied {
+      background-color: #ffebee;
+      border: 1px solid #f44336;
+    }
+
+    .affected-trees {
+      margin-top: 1rem;
+      max-height: 300px;
+      overflow-y: auto;
+      padding: 0.5rem;
+      background: #f8f9fa;
+      border-radius: 4px;
+    }
+
+    .affected-tree-item {
+      padding: 0.5rem;
+      border-bottom: 1px solid #eee;
+      display: flex;
+      align-items: center;
+    }
+
+    .affected-tree-item:last-child {
+      border-bottom: none;
+    }
+
+    .tree-status-icon {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      margin-right: 0.5rem;
+      flex-shrink: 0;
+    }
+
+    .status-protected {
+      background-color: #f44336;
+    }
+
+    .status-permit {
+      background-color: #ffc107;
+    }
+
+    .status-allowed {
+      background-color: #0a8806;
+    }
+
+    .building-zone {
+      opacity: 0.5;
+      stroke-dasharray: 5, 5;
+      stroke-width: 2;
+      stroke: #333;
+    }
+
+    .building-form {
+      margin-top: 1rem;
+      padding: 1rem;
+      background: #f8f9fa;
+      border-radius: 4px;
+    }
+
+    .form-group {
+      margin-bottom: 1rem;
+    }
+
+    .form-label {
+      display: block;
+      margin-bottom: 0.5rem;
+      font-weight: 600;
+    }
+
+    .form-input {
+      width: 100%;
+      padding: 0.5rem;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+
+    .form-select {
+      width: 100%;
+      padding: 0.5rem;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+
+    .steps-container {
+      margin-top: 1rem;
+      padding: 1rem;
+      background: #f8f9fa;
+      border-radius: 4px;
+    }
+
+    .step-item {
+      margin-bottom: 1rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid #eee;
+    }
+
+    .step-item:last-child {
+      margin-bottom: 0;
+      padding-bottom: 0;
+      border-bottom: none;
+    }
+
+    .step-number {
+      display: inline-block;
+      width: 24px;
+      height: 24px;
+      background: #0a8806;
+      color: white;
+      border-radius: 50%;
+      text-align: center;
+      line-height: 24px;
+      margin-right: 0.5rem;
+    }
+
+    .step-title {
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+    }
+
+    .step-description {
+      margin-left: 2rem;
+      font-size: 0.9rem;
+    }
+
+    /* Building Availability Modal */
+    .building-modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 2000; /* Increased z-index to ensure it's above the map */
+    }
+
+    .building-modal-content {
+      position: relative;
+      background: white;
+      width: 90%;
+      max-width: 1000px;
+      margin: 2rem auto;
+      padding: 2rem;
+      border-radius: 8px;
+      max-height: 90vh;
+      overflow-y: auto;
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+      z-index: 2001; /* Higher than modal backdrop */
+    }
+
+    /* Make sure the map doesn't cover the modal */
+    #map {
+      z-index: 1; /* Lower z-index */
+    }
+
+    /* Availability Overlay Styles */
+    .availability-toggle {
+      position: relative;
+      display: flex;
+      align-items: center;
+      margin-top: 1rem;
+    }
+
+    .availability-legend {
+      display: none;
+      margin-top: 1rem;
+      padding: 0.5rem;
+      background: #f8f9fa;
+      border-radius: 4px;
+      font-size: 0.9rem;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      margin-bottom: 0.5rem;
+    }
+
+    .legend-color {
+      width: 20px;
+      height: 20px;
+      margin-right: 0.5rem;
+      border-radius: 3px;
+      border: 1px solid rgba(0,0,0,0.2);
+    }
+
+    .legend-available {
+      background-color: rgba(10, 136, 6, 0.2);
+    }
+
+    .legend-permit {
+      background-color: rgba(255, 193, 7, 0.3);
+    }
+
+    .legend-restricted {
+      background-color: rgba(244, 67, 54, 0.3);
+    }
+
+    .availability-grid {
+      position: absolute;
+      pointer-events: none;
+    }
+
+    .grid-cell {
+      position: absolute;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      cursor: pointer;
+      pointer-events: all;
+      transition: background-color 0.2s ease-in-out;
+    }
+
+    .cell-available {
+      background-color: rgba(10, 136, 6, 0.2);
+    }
+
+    .cell-permit-required {
+      background-color: rgba(255, 193, 7, 0.3);
+    }
+
+    .cell-restricted {
+      background-color: rgba(244, 67, 54, 0.3);
+    }
+
+    .grid-cell:hover {
+      opacity: 0.8;
+      box-shadow: inset 0 0 0 2px #fff;
+    }
+
+    .cell-tooltip {
+      position: absolute;
+      background: white;
+      padding: 5px 10px;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      z-index: 1000;
+      pointer-events: none;
+      max-width: 200px;
+    }
+
+    .btn-show-availability {
+      background: #0a8806;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      margin-top: 0.5rem;
+      display: inline-block !important; /* Ensure button is always displayed */
+      margin-left: 0.5rem;
+      z-index: 100; /* Ensure button is above other elements */
+      position: relative; /* Enable z-index */
+    }
+
+    .btn-show-availability:hover {
+      background: #097205;
+    }
+    
+    /* Add specific button states */
+    .btn-show-availability.active {
+      background: #d32f2f;
+    }
+    
+    .btn-show-availability.active:hover {
+      background: #b71c1c;
+    }
+    
+    .resolution-control {
+      margin-left: 1rem;
+      width: 120px;
+    }
+    
+    /* Result banner styles */
+    .result-banner {
+      padding: 15px;
+      border-radius: 4px;
+      margin-bottom: 15px;
+      display: flex;
+      align-items: center;
+      font-size: 1.1em;
+    }
+    
+    .result-banner i {
+      margin-right: 10px;
+      font-size: 1.5em;
+    }
+    
+    .red-result {
+      background-color: #ffe9e9;
+      color: #d32f2f;
+      border-left: 5px solid #d32f2f;
+    }
+    
+    .yellow-result {
+      background-color: #fff9e6;
+      color: #f57c00;
+      border-left: 5px solid #f57c00;
+    }
+    
+    .green-result {
+      background-color: #e6fff0;
+      color: #0a8806;
+      border-left: 5px solid #0a8806;
+    }
+  </style>
+  <!-- Add some style fixes to ensure the maps display correctly -->
+  <style>
+    #modalMapContainer {
+      width: 100%;
+      height: 400px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      margin-bottom: 15px;
+      position: relative;
+      z-index: 1;
+      display: block !important;
+    }
+    
+    .leaflet-container {
+      z-index: 1;
+    }
+    
+    .building-modal {
+      z-index: 2000 !important;
+    }
+    
+    .building-modal-content {
+      z-index: 2001 !important;
+    }
+    
+    /* Ensure modal map is visible */
+    .building-modal-content .leaflet-container {
+      height: 400px !important;
+      width: 100% !important;
+      z-index: 1;
+    }
+    
+    /* Fix for the modal map rendering */
+    #buildingMapArea {
+      position: relative;
+      overflow: visible;
+    }
+    
+    /* Make sure buttons are visible */
+    .building-buttons-container {
+      display: flex !important;
+      gap: 10px;
+      justify-content: center;
+      margin-top: 15px;
+    }
+    
+    .building-buttons-container .btn-save,
+    .building-buttons-container .btn-cancel {
+      display: inline-block !important;
+      padding: 12px 24px;
+      font-size: 16px;
+      opacity: 1 !important;
+      visibility: visible !important;
+    }
+    
+    /* Area modal map fixes */
+    #modalMap {
+      width: 100% !important;
+      height: 400px !important;
+      position: relative !important;
+      display: block !important;
+      z-index: 1;
+    }
+    
+    .modal-map .leaflet-container {
+      height: 400px !important;
+      width: 100% !important;
+    }
+    
+    .modal {
+      z-index: 1500 !important;
+    }
+    
+    .modal-content {
+      z-index: 1501 !important;
+    }
+    
+    /* Fix for map not being visible in modals due to z-index issues */
+    .leaflet-pane {
+      z-index: 400 !important;
+    }
+    
+    .leaflet-control-container .leaflet-top {
+      z-index: 410 !important;
+    }
+    
+    .leaflet-control-container .leaflet-bottom {
+      z-index: 410 !important;
+    }
+    
+    /* Building modal map fixes */
+    #modalMapContainer {
+      width: 100% !important;
+      height: 400px !important;
+      position: relative !important;
+      display: block !important;
+      z-index: 1;
+      border: 1px solid #ccc;
+      margin: 10px 0;
+    }
+    
+    #modalMapContainer .leaflet-container {
+      height: 400px !important;
+      width: 100% !important;
+    }
+    
+    .building-modal {
+      z-index: 1600 !important;
+    }
+    
+    .building-modal-content {
+      z-index: 1601 !important;
+    }
+    
+    /* Fix for map not being visible in modals due to z-index issues */
+    .leaflet-pane {
+      z-index: 400 !important;
+    }
+    
+    .leaflet-control-container .leaflet-top {
+      z-index: 410 !important;
+    }
+    
+    .leaflet-control-container .leaflet-bottom {
+      z-index: 410 !important;
+    }
+  </style>
+  <style>
+    .error-message {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 1000;
+      animation: slideIn 0.3s ease-out;
+    }
+
+    .error-content {
+      background-color: #fee2e2;
+      border: 1px solid #ef4444;
+      border-radius: 6px;
+      padding: 12px 40px 12px 16px;
+      color: #991b1b;
+      font-size: 14px;
+      position: relative;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+
+    .error-close {
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      cursor: pointer;
+      font-size: 18px;
+      color: #991b1b;
+    }
+
+    .error-close:hover {
+      color: #7f1d1d;
+    }
+
+    @keyframes slideIn {
+      from {
+        transform: translateX(100%);
+        opacity: 0;
+      }
+      to {
+        transform: translateX(0);
+        opacity: 1;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Location Management</h1>
+    <button id="btnStartEnroll" class="btn-enroll">Enroll New Location</button>
+    
+    <div class="map-actions">
+      <button id="btnSaveArea" class="btn-save">Save Area</button>
+      <button id="btnCancelEnroll" class="btn-cancel">Cancel</button>
+    </div>
+    
+    <div class="drawing-instructions" id="drawingInstructions">
+      Draw your area on the map by clicking points to create a polygon. Click the first point to complete the shape.
+    </div>
+    
+    <div class="map-container" id="mapContainer">
+      <div class="loading-container" id="mapLoading">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">Loading map...</div>
+      </div>
+      <div id="map" style="width:100%;height:100%"></div>
+    </div>
+
+    <div class="enrolled-areas">
+      <h2>Your Enrolled Areas</h2>
+      <ul id="areasList" class="area-list">
+        <li class="no-areas">No areas enrolled yet. Click "Enroll New Location" to get started.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Area Details Modal -->
+  <div id="areaModal" class="modal">
+    <div class="modal-content">
+      <span class="close-modal" onclick="closeModal()">&times;</span>
+      <h2 id="modalTitle">Area Details</h2>
+      <div class="area-stats">
+        <div class="stat-card">
+          <div class="stat-value" id="perimeterValue">0</div>
+          <div class="stat-label">Perimeter (meters)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="treeCountValue">0</div>
+          <div class="stat-label">Trees</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="areaValue">0</div>
+          <div class="stat-label">Area (sq. meters)</div>
+        </div>
+      </div>
+      <div id="modalMap" class="modal-map"></div>
+      <div class="tree-list">
+        <button id="backToTypes" class="back-to-types">Back to Tree Types</button>
+        <h3 class="tree-list-title">Trees in this Area</h3>
+        <div id="treeGrid" class="tree-grid">
+          <!-- Tree cards will be added here -->
+        </div>
+        <div id="treeDetails" class="tree-details">
+          <!-- Tree details will be added here -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Building Availability Modal -->
+  <div id="buildingModal" class="building-modal">
+    <div class="building-modal-content">
+      <span class="close-modal" onclick="closeBuildingModal()">&times;</span>
+      <h2 id="buildingModalTitle">Check Building Availability</h2>
+      
+      <div class="building-form" id="buildingForm">
+        <div class="form-group">
+          <label class="form-label" for="structureType">Structure Type:</label>
+          <select class="form-select" id="structureType">
+            <option value="residential">Residential Building</option>
+            <option value="commercial">Commercial Building</option>
+            <option value="agricultural">Agricultural Structure</option>
+            <option value="infrastructure">Infrastructure Project</option>
+          </select>
+        </div>
+        
+        <div class="form-group">
+          <label class="form-label" for="structureSize">Estimated Size (sq. meters):</label>
+          <input type="number" class="form-input" id="structureSize" min="1" placeholder="Enter size">
+        </div>
+        
+        <div class="form-group">
+          <label class="form-label" for="projectDescription">Project Description:</label>
+          <textarea class="form-input" id="projectDescription" rows="3" placeholder="Brief description of your project"></textarea>
+        </div>
+        
+        <div class="form-group" style="margin-top: 25px;">
+          <button type="button" id="btnSelectLocation" onclick="startLocationSelection()" class="btn-save" style="display: block; width: 100%; padding: 15px; font-size: 16px; font-weight: bold; cursor: pointer;">
+            Select Location on Map
+          </button>
+        </div>
+        
+        <div id="useSelectedCellContainer" style="margin-top: 10px;"></div>
+      </div>
+      
+      <div class="building-instructions" id="buildingInstructions" style="display:none; margin-top: 20px;">
+        <p>Click on the map to place your building location, then drag to set the size.</p>
+        <div id="modalMapContainer" style="width: 100%; height: 400px; border: 1px solid #ddd; border-radius: 4px; margin: 15px 0;"></div>
+        <div style="text-align: center; margin-bottom: 10px; font-size: 0.8em;">
+          <button onclick="resetModalMap()" style="background: #f8f9fa; border: 1px solid #ddd; padding: 5px 10px; border-radius: 4px; cursor: pointer;">
+            Map not showing? Click to reset
+          </button>
+        </div>
+        <div class="building-buttons-container" style="margin-top: 15px; display: flex !important; gap: 10px; justify-content: center;">
+          <button type="button" onclick="confirmDrawing()" class="btn-save" style="display: inline-block !important; padding: 12px 24px; font-size: 16px;">Confirm Location</button>
+          <button type="button" onclick="cancelLocationSelection()" class="btn-cancel" style="display: inline-block !important; padding: 12px 24px; font-size: 16px;">Cancel</button>
+        </div>
+      </div>
+      
+      <div class="building-result" id="buildingResult" style="display:none;">
+        <h3 id="resultTitle">Building Availability Result</h3>
+        <p id="resultMessage"></p>
+        
+        <div id="affectedTreesContainer" style="display: none;">
+          <h4>Affected Trees:</h4>
+          <div class="affected-trees" id="affectedTrees"></div>
+        </div>
+        
+        <div id="stepsContainer" class="steps-container" style="display: none;">
+          <h4>Required Steps:</h4>
+          <div id="requiredSteps"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Initialize map variables
+    let map = null;
+    let drawnItems = null;
+    let treeMarkers = null;
+    let availabilityOverlay = null;
+    let buildingPolygon = null;
+    let modalMap = null;
+    let buildingMode = false;
+    let activeArea = null;
+    let userLocationMarker = null;
+    let weatherLayer = null;
+    let currentWeather = null;
+    let buildingLayer = null;
+    let currentArea = null;
+    let gridCells = [];
+    let tooltipElement = null;
+    let activeOverlayArea = null;
+    let gridResolution = 10; // Default grid resolution (meters)
+    
+    // Initialize variables
+    document.addEventListener('DOMContentLoaded', function() {
+      const authToken = localStorage.getItem('authToken');
+      const userId = localStorage.getItem('user_id');
+      
+      if (!authToken || !userId) {
+        window.location.href = 'index.html';
+        return;
+      }
+
+      // Load enrolled areas immediately
+      loadEnrolledAreas();
+      
+      // Initialize buildingLayer to prevent "undefined" errors
+      buildingLayer = L.featureGroup();
+    });
+
+    // Promise wrapper for geolocation with better accuracy and retry logic
+    function getCurrentPosition(retryCount = 0, maxRetries = 2) {
+      return new Promise((resolve, reject) => {
+        if (!navigator.geolocation) {
+          reject(new Error('Geolocation is not supported by your browser'));
+          return;
+        }
+
+        // Geolocation options
+        const options = {
+          enableHighAccuracy: true,  // Request best possible position
+          timeout: 10000,            // Wait up to 10 seconds
+          maximumAge: 0              // Always get fresh position
+        };
+
+        // Success handler with accuracy check
+        const successHandler = (position) => {
+          // Check if accuracy is reasonable (within 100 meters)
+          if (position.coords.accuracy <= 100) {
+            resolve(position);
+          } else if (retryCount < maxRetries) {
+            // If accuracy is poor and we haven't hit max retries, try again
+            console.log(`Poor accuracy (${position.coords.accuracy}m), retrying...`);
+            setTimeout(() => {
+              getCurrentPosition(retryCount + 1, maxRetries)
+                .then(resolve)
+                .catch(reject);
+            }, 1000);
+          } else {
+            // If we've hit max retries, use the best position we got
+            console.log(`Using position with accuracy: ${position.coords.accuracy}m`);
+            resolve(position);
+          }
+        };
+
+        // Error handler with retry logic
+        const errorHandler = (error) => {
+          if (retryCount < maxRetries) {
+            // If we haven't hit max retries, try again
+            console.log(`Geolocation error (${error.message}), retrying...`);
+            setTimeout(() => {
+              getCurrentPosition(retryCount + 1, maxRetries)
+                .then(resolve)
+                .catch(reject);
+            }, 1000);
+          } else {
+            // If we've hit max retries, return the error
+            console.error('Geolocation failed after retries:', error);
+            reject(error);
+          }
+        };
+
+        // Start geolocation request
+        navigator.geolocation.getCurrentPosition(
+          successHandler,
+          errorHandler,
+          options
+        );
+      });
+    }
+
+    // Helper function to check if coordinates are valid
+    function isValidCoordinate(lat, lng) {
+      return (
+        typeof lat === 'number' && 
+        typeof lng === 'number' && 
+        !isNaN(lat) && 
+        !isNaN(lng) && 
+        lat >= -90 && 
+        lat <= 90 && 
+        lng >= -180 && 
+        lng <= 180
+      );
+    }
+
+    // Initialize map with user's location
+    async function initMap() {
+      if (map) return; // Don't initialize if already exists
+      
+      map = L.map('mapContainer', {
+        center: [9.7600, 118.7625],
+        zoom: 13,
+        zoomControl: true,
+        maxZoom: 19,
+        minZoom: 8,
+        preferCanvas: true, // Add canvas rendering for better performance
+        wheelDebounceTime: 150 // Debounce wheel events for smoother zooming
+      });
+      
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+        attribution: '© OpenStreetMap contributors, © CARTO',
+        subdomains: 'abcd',
+        maxZoom: 19,
+        minZoom: 8,
+        tileSize: 256,
+        crossOrigin: true,
+        keepBuffer: 2, // Keep more tiles in buffer for smoother panning
+        updateWhenIdle: true, // Update tiles only when panning ends
+        maxNativeZoom: 18 // Maximum zoom level of the tile server
+      }).addTo(map);
+      
+      // Initialize layer groups
+      drawnItems = new L.FeatureGroup().addTo(map);
+      treeMarkers = L.layerGroup().addTo(map);
+      availabilityOverlay = L.layerGroup().addTo(map);
+    }
+
+    // Add weather control to map
+    function addWeatherControl(map, lat, lng) {
+      // Create custom control
+      const WeatherControl = L.Control.extend({
+        options: {
+          position: 'topright'
+        },
+        
+        onAdd: function(map) {
+          const container = L.DomUtil.create('div', 'weather-control');
+          container.innerHTML = `
+            <div id="weatherInfo">
+              <div class="weather-info">
+                <img id="weatherIcon" class="weather-icon" src="" alt="Weather">
+                <div>
+                  <div id="weatherTemp" class="weather-temp">--°C</div>
+                  <div id="weatherDesc" class="weather-description">Loading weather...</div>
+                </div>
+              </div>
+              <div id="weatherDetails" class="weather-details">
+                <div>Humidity: <span id="weatherHumidity">--%</span></div>
+                <div>Wind: <span id="weatherWind">-- km/h</span></div>
+              </div>
+              <button id="refreshWeather" class="weather-refresh">Refresh</button>
+              <div class="weather-options">
+                <label class="weather-toggle">
+                  <input type="checkbox" id="weatherOverlay"> Show weather overlay
+                </label>
+              </div>
+            </div>
+          `;
+          
+          // Prevent propagation of map events
+          L.DomEvent.disableClickPropagation(container);
+          L.DomEvent.disableScrollPropagation(container);
+          
+          // Add event listeners after the control is added to the map
+          setTimeout(() => {
+            document.getElementById('refreshWeather').addEventListener('click', function() {
+              fetchWeather(lat, lng);
+            });
+            
+            document.getElementById('weatherOverlay').addEventListener('change', function(e) {
+              toggleWeatherOverlay(e.target.checked);
+            });
+            
+            // Initial weather fetch
+            fetchWeather(lat, lng);
+          }, 0);
+          
+          return container;
+        }
+      });
+      
+      // Add control to map
+      map.addControl(new WeatherControl());
+    }
+
+    // Fetch weather data from OpenWeatherMap API
+    async function fetchWeather(lat, lng) {
+      try {
+        // Update UI to show loading
+        document.getElementById('weatherDesc').textContent = 'Loading weather...';
+        
+        // OpenWeatherMap API key - normally would be kept server-side for security
+        // This is a placeholder API key, you'll need to get your own from openweathermap.org
+        const apiKey = 'YOUR_API_KEY'; // Replace with your actual API key
+        
+        // Skip API call if using the default placeholder key
+        if (apiKey === 'YOUR_API_KEY') {
+          document.getElementById('weatherDesc').textContent = 'API key not configured';
+          document.getElementById('weatherTemp').textContent = '--°C';
+          document.getElementById('weatherHumidity').textContent = '--%';
+          document.getElementById('weatherWind').textContent = '-- km/h';
+          
+          // Disable the weather overlay checkbox
+          const weatherOverlayCheckbox = document.getElementById('weatherOverlay');
+          if (weatherOverlayCheckbox) {
+            weatherOverlayCheckbox.disabled = true;
+            weatherOverlayCheckbox.checked = false;
+          }
+          
+          return;
+        }
+        
+        // Fetch weather data
+        const response = await fetch(`https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lng}&units=metric&appid=${apiKey}`);
+        
+        if (!response.ok) {
+          throw new Error('Weather data not available');
+        }
+        
+        const data = await response.json();
+        currentWeather = data;
+        
+        // Update weather UI
+        document.getElementById('weatherIcon').src = `https://openweathermap.org/img/wn/${data.weather[0].icon}@2x.png`;
+        document.getElementById('weatherTemp').textContent = `${Math.round(data.main.temp)}°C`;
+        document.getElementById('weatherDesc').textContent = data.weather[0].description;
+        document.getElementById('weatherHumidity').textContent = `${data.main.humidity}%`;
+        document.getElementById('weatherWind').textContent = `${Math.round(data.wind.speed * 3.6)} km/h`; // Convert m/s to km/h
+        
+        // If weather overlay is enabled, update it
+        if (document.getElementById('weatherOverlay').checked) {
+          updateWeatherOverlay(data);
+        }
+        
+        console.log('Weather updated successfully');
+      } catch (error) {
+        console.error('Error fetching weather:', error);
+        document.getElementById('weatherDesc').textContent = 'Weather unavailable';
+      }
+    }
+
+    // Toggle weather overlay on the map
+    function toggleWeatherOverlay(show) {
+      if (show && currentWeather) {
+        updateWeatherOverlay(currentWeather);
+      } else if (weatherLayer) {
+        map.removeLayer(weatherLayer);
+        weatherLayer = null;
+      }
+    }
+
+    // Update weather overlay on the map
+    function updateWeatherOverlay(weatherData) {
+      // Remove existing weather layer if any
+      if (weatherLayer) {
+        map.removeLayer(weatherLayer);
+      }
+      
+      // Create weather overlay based on conditions
+      const weather = weatherData.weather[0].main.toLowerCase();
+      let overlayOptions = {
+        opacity: 0.5,
+        attribution: 'Weather data: OpenWeatherMap'
+      };
+      
+      // Different overlay styles based on weather condition
+      if (weather.includes('rain') || weather.includes('drizzle')) {
+        // Blue overlay for rain
+        weatherLayer = L.rectangle(map.getBounds(), {
+          color: '#0044ff',
+          fillColor: '#0044ff',
+          fillOpacity: 0.2,
+          weight: 0
+        }).addTo(map);
+        
+        // Add rain effect
+        addRainEffect();
+      } else if (weather.includes('cloud')) {
+        // Gray overlay for clouds
+        weatherLayer = L.rectangle(map.getBounds(), {
+          color: '#888888',
+          fillColor: '#888888',
+          fillOpacity: 0.15,
+          weight: 0
+        }).addTo(map);
+      } else if (weather.includes('clear')) {
+        // Yellow/orange overlay for clear sky
+        weatherLayer = L.rectangle(map.getBounds(), {
+          color: '#ffbb00',
+          fillColor: '#ffbb00',
+          fillOpacity: 0.05,
+          weight: 0
+        }).addTo(map);
+      } else if (weather.includes('fog') || weather.includes('mist')) {
+        // White overlay for fog
+        weatherLayer = L.rectangle(map.getBounds(), {
+          color: '#ffffff',
+          fillColor: '#ffffff',
+          fillOpacity: 0.3,
+          weight: 0
+        }).addTo(map);
+      }
+      
+      // Update layer when map is moved
+      map.on('moveend', function() {
+        if (weatherLayer) {
+          map.removeLayer(weatherLayer);
+          updateWeatherOverlay(currentWeather);
+        }
+      });
+    }
+
+    // Add rain effect to the map
+    function addRainEffect() {
+      // Lightweight rain effect using CSS
+      const mapContainer = document.getElementById('map');
+      const rainContainer = document.createElement('div');
+      rainContainer.id = 'rainEffect';
+      rainContainer.style.cssText = `
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 400;
+      `;
+      
+      // Create raindrops
+      for (let i = 0; i < 100; i++) {
+        const raindrop = document.createElement('div');
+        raindrop.style.cssText = `
+          position: absolute;
+          width: 1px;
+          height: ${5 + Math.random() * 10}px;
+          background: rgba(200, 200, 255, 0.6);
+          left: ${Math.random() * 100}%;
+          top: ${Math.random() * 100}%;
+          animation: rain-fall ${0.5 + Math.random() * 1}s linear infinite;
+          opacity: ${0.4 + Math.random() * 0.6};
+        `;
+        rainContainer.appendChild(raindrop);
+      }
+      
+      // Add animation keyframes
+      const style = document.createElement('style');
+      style.textContent = `
+        @keyframes rain-fall {
+          0% { transform: translateY(-20px) rotate(10deg); }
+          100% { transform: translateY(20px) rotate(10deg); }
+        }
+      `;
+      document.head.appendChild(style);
+      
+      // Add to map
+      mapContainer.appendChild(rainContainer);
+      
+      // Remove rain effect when weather changes
+      map.on('layerremove', function(e) {
+        if (e.layer === weatherLayer) {
+          const rainEffect = document.getElementById('rainEffect');
+          if (rainEffect) {
+            rainEffect.remove();
+          }
+        }
+      });
+    }
+
+    // Update weather when user location changes
+    function updateWeatherForLocation(lat, lng) {
+      fetchWeather(lat, lng);
+    }
+
+    // Start enrollment process
+    document.getElementById('btnStartEnroll').addEventListener('click', async function() {
+      try {
+        const mapContainer = document.getElementById('mapContainer');
+        const drawingInstructions = document.getElementById('drawingInstructions');
+        const btnCancelEnroll = document.getElementById('btnCancelEnroll');
+        const loadingElement = document.getElementById('mapLoading');
+        
+        // Show necessary elements immediately
+        mapContainer.style.display = 'block';
+        drawingInstructions.style.display = 'block';
+        btnCancelEnroll.style.display = 'block';
+        this.style.display = 'none';
+        
+        // Initialize map if not exists
+        if (!map) {
+          loadingElement.style.display = 'flex';
+          await initMap();
+        }
+
+        // Remove existing draw control if present
+        if (drawControl && map.drawControl) {
+          map.removeControl(drawControl);
+          map.drawControl = null;
+        }
+
+        // Clear any existing layers
+        drawnItems.clearLayers();
+        
+        // Initialize draw control immediately
+        drawControl = new L.Control.Draw({
+          draw: {
+            polygon: {
+              allowIntersection: false,
+              showArea: true,
+              drawError: {
+                color: '#e1e100',
+                message: '<strong>Cannot draw intersecting polygon!</strong>'
+              },
+              shapeOptions: {
+                color: '#0a8806'
+              }
+            },
+            circle: false,
+            circlemarker: false,
+            marker: false,
+            polyline: false,
+            rectangle: false
+          },
+          edit: {
+            featureGroup: drawnItems,
+            remove: false
+          }
+        });
+
+        // Add draw control to map
+        map.addControl(drawControl);
+        map.drawControl = drawControl;
+
+        // Ensure draw:created event listener is set
+        map.off('draw:created'); // Remove any existing listeners
+        map.on('draw:created', function(e) {
+          drawnItems.clearLayers();
+          const layer = e.layer;
+          drawnItems.addLayer(layer);
+          document.getElementById('btnSaveArea').style.display = 'block';
+        });
+
+        // Try to get current location
+        if ("geolocation" in navigator) {
+          try {
+            loadingElement.style.display = 'flex';
+            const position = await getCurrentPosition();
+            if (isValidCoordinate(position.coords.latitude, position.coords.longitude)) {
+              // Force map refresh before updating view
+              map.invalidateSize();
+              map.setView([position.coords.latitude, position.coords.longitude], 15, { animate: false });
+              
+              if (userLocationMarker) {
+                userLocationMarker.setLatLng([position.coords.latitude, position.coords.longitude]);
+              } else {
+                userLocationMarker = L.circle([position.coords.latitude, position.coords.longitude], {
+                  color: '#0a8806',
+                  fillColor: '#0a8806',
+                  fillOpacity: 0.2,
+                  radius: 100,
+                  weight: 2
+                }).addTo(map);
+              }
+
+              // Update weather for new location
+              updateWeatherForLocation(position.coords.latitude, position.coords.longitude);
+
+              // Cache the successful position
+              localStorage.setItem('lastLat', position.coords.latitude.toString());
+              localStorage.setItem('lastLng', position.coords.longitude.toString());
+            }
+          } catch (error) {
+            console.error("Error updating location:", error);
+          } finally {
+            loadingElement.style.display = 'none';
+          }
+        }
+
+        // Clear any active area selection
+        if (activeArea) {
+          const previousActiveCard = document.querySelector('.area-card.active');
+          if (previousActiveCard) {
+            previousActiveCard.classList.remove('active');
+          }
+          activeArea = null;
+          treeMarkers.clearLayers();
+        }
+
+        // Hide save button until area is drawn
+        document.getElementById('btnSaveArea').style.display = 'none';
+
+        // Final map refresh
+        setTimeout(() => {
+          map.invalidateSize();
+        }, 100);
+        
+      } catch (error) {
+        console.error("Error in enrollment process:", error);
+        // Reset UI state
+        const mapContainer = document.getElementById('mapContainer');
+        const drawingInstructions = document.getElementById('drawingInstructions');
+        const btnCancelEnroll = document.getElementById('btnCancelEnroll');
+        const btnStartEnroll = document.getElementById('btnStartEnroll');
+        const loadingElement = document.getElementById('mapLoading');
+        
+        mapContainer.style.display = 'none';
+        drawingInstructions.style.display = 'none';
+        btnCancelEnroll.style.display = 'none';
+        btnStartEnroll.style.display = 'block';
+        loadingElement.style.display = 'none';
+        
+        alert("There was an error starting the enrollment process. Please try again. Error: " + error.message);
+      }
+    });
+
+    // Cancel enrollment process
+    document.getElementById('btnCancelEnroll').addEventListener('click', function() {
+      const mapContainer = document.getElementById('mapContainer');
+      mapContainer.style.display = 'none';
+      document.getElementById('btnStartEnroll').style.display = 'block';
+      document.getElementById('btnSaveArea').style.display = 'none';
+      document.getElementById('btnCancelEnroll').style.display = 'none';
+      document.getElementById('drawingInstructions').style.display = 'none';
+      
+      if (map) {
+        drawnItems.clearLayers();
+        map.removeControl(drawControl);
+      }
+    });
+
+    // Save drawn area
+    document.getElementById('btnSaveArea').addEventListener('click', async function() {
+      try {
+        const areas = [];
+        drawnItems.eachLayer(function(layer) {
+          if (layer instanceof L.Polygon) {
+            areas.push(layer.getLatLngs()[0].map(latlng => [latlng.lat, latlng.lng]));
+          }
+        });
+
+        if (areas.length === 0) {
+          alert('Please draw an area first');
+          return;
+        }
+
+        const response = await authenticatedFetch('save_enrolled_area.php', {          method: 'POST',          headers: {            'Content-Type': 'application/json'          },          body: JSON.stringify({            coordinates: areas[0]          })
+        });
+
+        const data = await response.json();
+        if (data.success) {
+          alert('Area saved successfully!');
+          await loadEnrolledAreas();
+          drawnItems.clearLayers();
+          map.removeControl(drawControl);
+          document.getElementById('btnStartEnroll').style.display = 'block';
+          document.getElementById('btnSaveArea').style.display = 'none';
+          document.getElementById('btnCancelEnroll').style.display = 'none';
+          document.getElementById('drawingInstructions').style.display = 'none';
+          document.getElementById('mapContainer').style.display = 'none';
+        } else {
+          throw new Error(data.message || 'Failed to save area');
+        }
+      } catch (error) {
+        console.error('Error saving area:', error);
+        alert('Failed to save area. Please try again.');
+      }
+    });
+
+    // Load enrolled areas
+    async function loadEnrolledAreas() {
+      try {
+        const authToken = localStorage.getItem('authToken');
+        const userId = localStorage.getItem('user_id');
+
+        if (!authToken || !userId) {
+          console.error('Missing authentication data:', { authToken: !!authToken, userId: !!userId });
+          window.location.href = 'index.html';
+          return;
+        }
+
+        console.log('Fetching enrolled areas with:', { userId });
+        const response = await authenticatedFetch('get_enrolled_areas.php', {          headers: {            'Content-Type': 'application/json'          }
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('Server response not ok:', {
+            status: response.status,
+            statusText: response.statusText,
+            errorText
+          });
+          throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+        }
+
+        const result = await response.json();
+        console.log('Received areas data:', result);
+
+        if (!result.success) {
+          throw new Error(result.message || 'Failed to load areas');
+        }
+
+        const areas = result.data;
+        const areasList = document.getElementById('areasList');
+        
+        if (!areas || areas.length === 0) {
+          console.log('No areas found');
+          areasList.innerHTML = '<li class="no-areas">No areas enrolled yet. Click "Enroll New Location" to get started.</li>';
+          return;
+        }
+
+        console.log(`Found ${areas.length} areas`);
+        areasList.innerHTML = '';
+        areas.forEach((area, index) => {
+          const listItem = document.createElement('li');
+          listItem.className = 'area-list-item';
+          listItem.innerHTML = `
+            <div class="area-info">
+              <div class="area-title">Area #${index + 1}</div>
+              <div class="area-date">Enrolled on: ${new Date(area.created_at).toLocaleDateString()}</div>
+            </div>
+            <div>
+              <button class="btn-view-details" onclick="showAreaDetails(${JSON.stringify(area).replace(/"/g, '&quot;')})">View Details</button>
+              <button class="btn-check-availability" onclick="checkBuildingAvailability(${JSON.stringify(area).replace(/"/g, '&quot;')})">Check Building Availability</button>
+            </div>
+          `;
+          
+          listItem.addEventListener('click', () => showAreaOnMap(area));
+          areasList.appendChild(listItem);
+        });
+      } catch (error) {
+        console.error('Error loading areas:', error);
+        const areasList = document.getElementById('areasList');
+        areasList.innerHTML = `
+          <li class="no-areas">
+            Error loading areas. Please try refreshing the page.
+            <br>
+            <small style="color: #666;">${error.message}</small>
+          </li>
+        `;
+      }
+    }
+
+    // Show specific area on main map
+    function showAreaOnMap(area) {
+      if (!map) {
+        initMap();
+      }
+      
+      const mapContainer = document.getElementById('mapContainer');
+      mapContainer.style.display = 'block';
+      
+      // Initialize layers if they don't exist
+      if (!drawnItems) {
+        drawnItems = new L.FeatureGroup();
+        map.addLayer(drawnItems);
+      }
+      if (!treeMarkers) {
+        treeMarkers = L.layerGroup();
+        map.addLayer(treeMarkers);
+      }
+      
+      // Clear existing layers - check if initialized first
+      if (drawnItems) drawnItems.clearLayers();
+      if (treeMarkers) treeMarkers.clearLayers();
+      
+      // Add the selected area to the map
+      const polygon = L.polygon(area.coordinates, {color: '#0a8806'});
+      drawnItems.addLayer(polygon);
+      map.fitBounds(polygon.getBounds());
+      
+      // Update active state in the list (if element exists)
+      const areaElement = document.querySelector(`#area-map-${area.id}`);
+      if (areaElement) {
+        const areaCards = document.querySelectorAll('.area-card');
+        areaCards.forEach(card => card.classList.remove('active'));
+        areaElement.closest('.area-card').classList.add('active');
+      }
+      
+      // Store active area
+      activeArea = area;
+      
+      // Load trees for this area
+      loadTreesForArea(area);
+      
+      // Add or update availability overlay button
+      const mapActions = document.querySelector('.map-actions');
+      let availabilityButton = document.getElementById('btnShowAvailability');
+      
+      // Remove any existing button to avoid duplicates
+      if (availabilityButton) {
+        availabilityButton.remove();
+      }
+      
+      // Create a new button
+      availabilityButton = document.createElement('button');
+      availabilityButton.id = 'btnShowAvailability';
+      availabilityButton.className = 'btn-show-availability';
+      
+      // Set text based on current overlay state
+      const isOverlayActive = availabilityOverlay && availabilityOverlay.getLayers().length > 0;
+      availabilityButton.textContent = isOverlayActive ? 'Hide Building Availability' : 'Show Building Availability';
+      
+      // Add appropriate class based on state
+      if (isOverlayActive) {
+        availabilityButton.classList.add('active');
+      } else {
+        availabilityButton.classList.remove('active');
+      }
+      
+      // Set click handler
+      availabilityButton.addEventListener('click', () => showAvailabilityOverlay(area));
+      
+      // Add to map actions
+      mapActions.appendChild(availabilityButton);
+      console.log("Availability button added/updated:", availabilityButton.textContent);
+    }
+
+    // Load trees for specific area
+    async function loadTreesForArea(area) {
+      console.log('Loading trees for area:', area);
+      
+      // Create and add loading indicator
+      const loadingDiv = document.createElement('div');
+      loadingDiv.className = 'tree-loading-indicator';
+      loadingDiv.innerHTML = '<div class="loading-spinner"></div> Loading trees...';
+      
+      // Find a suitable container for the loading indicator
+      const mapContainer = document.getElementById('mapContainer');
+      if (!mapContainer) {
+          console.error('Map container not found');
+          return;
+      }
+      
+      mapContainer.appendChild(loadingDiv);
+      
+      try {
+          // Construct URL with area_id parameter
+          const url = new URL('get_trees.php', window.location.href);
+          if (area && area.id) {
+              url.searchParams.append('area_id', area.id);
+          }
+          
+          const response = await fetch(url, {
+              headers: {
+                  'Authorization': `Bearer ${localStorage.getItem('authToken')}`,
+                  'X-User-ID': localStorage.getItem('user_id')
+              }
+          });
+
+          if (!response.ok) {
+              const errorText = await response.text();
+              console.error('Server error response:', errorText);
+              throw new Error(`HTTP error! status: ${response.status}, details: ${errorText}`);
+          }
+
+          // Try to parse the response as text first
+          const text = await response.text();
+          let data;
+          
+          try {
+              data = JSON.parse(text);
+          } catch (e) {
+              console.error("Invalid JSON response:", text);
+              throw new Error("Server returned invalid JSON");
+          }
+
+          if (!data.success) {
+              throw new Error(data.message || 'Failed to load trees');
+          }
+
+          // Remove loading indicator
+          if (loadingDiv && loadingDiv.parentNode) {
+              loadingDiv.parentNode.removeChild(loadingDiv);
+          }
+
+          // Clear existing tree markers
+          if (treeMarkers) {
+              treeMarkers.clearLayers();
+          }
+
+          // Process and display trees
+          if (data.data && Array.isArray(data.data)) {
+              data.data.forEach(tree => {
+                  if (tree.lat && tree.lng) {
+                      const markerIcon = L.divIcon({
+                          className: 'tree-marker',
+                          iconSize: [12, 12],
+                          html: `<div style="background-color: ${tree.endemic ? '#ff6b6b' : '#0a8806'}; border: 2px solid white; border-radius: 50%; width: 12px; height: 12px; box-shadow: 0 0 4px rgba(0,0,0,0.3);"></div>`
+                      });
+                      
+                      L.marker([tree.lat, tree.lng], {
+                          icon: markerIcon
+                      }).addTo(treeMarkers);
+                  }
+              });
+          }
+
+          return data.data || [];
+          
+      } catch (error) {
+          console.error('Error loading trees:', error);
+          
+          // Remove loading indicator if it exists
+          const loadingIndicator = document.querySelector('.tree-loading-indicator');
+          if (loadingIndicator) {
+              loadingIndicator.remove();
+          }
+
+          // Show error message to user
+          showError('Failed to load trees. Please try again later.');
+          
+          return [];
+      }
+    }
+
+    // Helper function to check if a point is inside a polygon
+    function isPointInPolygon(point, polygon) {
+      console.log("Checking if point is in polygon:", point, polygon);
+      
+      // Ensure we have valid inputs
+      if (!point || !polygon || !Array.isArray(point) || !Array.isArray(polygon) || polygon.length < 3) {
+        console.error("Invalid inputs for isPointInPolygon");
+        return false;
+      }
+      
+      const x = point[0], y = point[1];
+      let inside = false;
+      
+      for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+        const xi = polygon[i][0], yi = polygon[i][1];
+        const xj = polygon[j][0], yj = polygon[j][1];
+        
+        const intersect = ((yi > y) !== (yj > y))
+          && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+        if (intersect) inside = !inside;
+      }
+      
+      console.log("Point is inside polygon:", inside);
+      return inside;
+    }
+
+    // Calculate perimeter of a polygon
+    function calculatePerimeter(coordinates) {
+      let perimeter = 0;
+      for (let i = 0; i < coordinates.length; i++) {
+        const j = (i + 1) % coordinates.length;
+        const dx = coordinates[j][0] - coordinates[i][0];
+        const dy = coordinates[j][1] - coordinates[i][1];
+        perimeter += Math.sqrt(dx * dx + dy * dy) * 111319.9; // Convert to meters
+      }
+      return Math.round(perimeter);
+    }
+
+    // Calculate area of a polygon
+    function calculateArea(coordinates) {
+      let area = 0;
+      for (let i = 0; i < coordinates.length; i++) {
+        const j = (i + 1) % coordinates.length;
+        area += coordinates[i][0] * coordinates[j][1];
+        area -= coordinates[j][0] * coordinates[i][1];
+      }
+      area = Math.abs(area) * 111319.9 * 111319.9 / 2; // Convert to square meters
+      return Math.round(area);
+    }
+
+    // Show area details in modal
+    async function showAreaDetails(area) {
+      try {
+        const modal = document.getElementById('areaModal');
+        const modalTitle = document.getElementById('modalTitle');
+        const perimeterValue = document.getElementById('perimeterValue');
+        const areaValue = document.getElementById('areaValue');
+        const treeCountValue = document.getElementById('treeCountValue');
+        const treeGrid = document.getElementById('treeGrid');
+        const treeDetails = document.getElementById('treeDetails');
+        const backButton = document.getElementById('backToTypes');
+
+        modalTitle.textContent = `Area Details`;
+        modal.style.display = 'block';
+        treeDetails.style.display = 'none';
+        backButton.style.display = 'none';
+        treeGrid.style.display = 'grid';
+
+        // Force browser layout calculation to ensure container is fully visible
+        modal.offsetHeight;
+        
+        console.log("Initializing area details map");
+        const modalMapContainer = document.getElementById('modalMap');
+        
+        if (!modalMapContainer) {
+          console.error("Modal map container not found");
+          return;
+        }
+        
+        // Force dimensions on the container
+        modalMapContainer.style.width = '100%';
+        modalMapContainer.style.height = '400px';
+        modalMapContainer.style.display = 'block';
+        
+        // Remove existing map if it exists
+        if (modalMap) {
+          try {
+            modalMap.remove();
+          } catch (err) {
+            console.error("Error removing existing map:", err);
+          }
+        }
+        
+        // Create a new map instance
+        modalMap = L.map('modalMap', {
+          zoomControl: true,
+          maxZoom: 19,
+          minZoom: 8
+        });
+        
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '© OpenStreetMap contributors'
+        }).addTo(modalMap);
+        
+        console.log("Area details map created");
+        
+        // Add area polygon immediately to ensure it's added
+        const polygon = L.polygon(area.coordinates, {color: '#0a8806'}).addTo(modalMap);
+        modalMap.fitBounds(polygon.getBounds());
+        
+        // Calculate and display statistics
+        perimeterValue.textContent = calculatePerimeter(area.coordinates);
+        areaValue.textContent = calculateArea(area.coordinates);
+        
+        // Force a map refresh after a short delay
+        setTimeout(() => {
+          modalMap.invalidateSize();
+        }, 300);
+
+        try {
+          // Safely fetch tree data with better error handling
+          const response = await fetch(`get_trees.php`, {
+            headers: {
+              'Authorization': `Bearer ${localStorage.getItem('authToken')}`,
+              'X-User-ID': localStorage.getItem('user_id')
+            }
+          });
+
+          // Check if the response is JSON
+          const contentType = response.headers.get("content-type");
+          if (!contentType || !contentType.includes("application/json")) {
+            // Handle non-JSON response
+            const text = await response.text();
+            console.error("Received non-JSON response:", text);
+            throw new Error("Server returned an invalid response format");
+          }
+          
+          const data = await response.json();
+          
+          if (data.success) {
+            const trees = data.data.filter(tree => 
+              isPointInPolygon([tree.lat, tree.lng], area.coordinates)
+            );
+
+            treeCountValue.textContent = trees.length;
+            treeGrid.innerHTML = '';
+
+            // Group trees by type and count them
+            const treeCounts = trees.reduce((acc, tree) => {
+              if (!acc[tree.type]) {
+                acc[tree.type] = {
+                  total: 0,
+                  endemic: 0,
+                  trees: []
+                };
+              }
+              acc[tree.type].total++;
+              if (tree.endemic) acc[tree.type].endemic++;
+              acc[tree.type].trees.push(tree);
+              return acc;
+            }, {});
+
+            // Store trees data
+            treeGrid.dataset.trees = JSON.stringify(trees);
+
+            // Add tree markers to map
+            trees.forEach(tree => {
+              const markerIcon = L.divIcon({
+                className: 'tree-marker',
+                iconSize: [12, 12],
+                html: `<div style="background-color: ${tree.endemic ? '#ff6b6b' : '#0a8806'}; border: 2px solid white; border-radius: 50%; width: 12px; height: 12px; box-shadow: 0 0 4px rgba(0,0,0,0.3);"></div>`
+              });
+              
+              L.marker([tree.lat, tree.lng], {
+                icon: markerIcon
+              }).addTo(modalMap);
+            });
+            
+            // Force another map refresh
+            modalMap.invalidateSize();
+
+            // Create a card for each tree type
+            Object.entries(treeCounts).sort().forEach(([type, data]) => {
+              const treeCard = document.createElement('div');
+              treeCard.className = `tree-card ${data.endemic > 0 ? 'endemic' : ''}`;
+              treeCard.dataset.type = type;
+              
+              treeCard.innerHTML = `
+                <div class="tree-type">
+                  ${type}
+                  ${data.endemic > 0 ? `<span class="endemic-badge">Endemic: ${data.endemic}</span>` : ''}
+                </div>
+                <div class="tree-count">Total Trees: ${data.total}</div>
+              `;
+
+              // Add click handler for tree type
+              treeCard.addEventListener('click', () => {
+                // Hide tree grid and show details
+                treeGrid.style.display = 'none';
+                treeDetails.style.display = 'block';
+                backButton.style.display = 'block';
+                
+                // Show details for this tree type
+                treeDetails.innerHTML = `
+                  <h3>${type} Trees (Total: ${data.total})</h3>
+                  ${data.trees.map(tree => `
+                    <div class="tree-detail-item ${tree.endemic ? 'endemic' : ''}">
+                      ${tree.endemic ? '<span class="endemic-badge">Endemic</span>' : ''}
+                      <strong>Location:</strong> ${tree.lat.toFixed(6)}, ${tree.lng.toFixed(6)}<br>
+                      ${tree.description ? `<strong>Description:</strong> ${tree.description}<br>` : ''}
+                      <strong>Status:</strong> ${tree.status || 'Not specified'}<br>
+                      <strong>Added:</strong> ${new Date(tree.created_at).toLocaleDateString()}<br>
+                      ${tree.photo_path ? `<img src="${tree.photo_path}" alt="Tree Photo" style="max-width: 200px; margin-top: 8px; border-radius: 4px;">` : ''}
+                    </div>
+                  `).join('')}
+                `;
+
+                // Update map to highlight selected tree type
+                modalMap.eachLayer((layer) => {
+                  if (layer instanceof L.Marker) {
+                    modalMap.removeLayer(layer);
+                  }
+                });
+
+                // Add markers for selected tree type
+                data.trees.forEach(tree => {
+                  const markerIcon = L.divIcon({
+                    className: 'tree-marker',
+                    iconSize: [12, 12],
+                    html: `<div style="background-color: ${tree.endemic ? '#ff6b6b' : '#0a8806'}; border: 2px solid white; border-radius: 50%; width: 12px; height: 12px; box-shadow: 0 0 4px rgba(0,0,0,0.3);"></div>`
+                  });
+                  
+                  L.marker([tree.lat, tree.lng], {
+                    icon: markerIcon
+                  }).addTo(modalMap);
+                });
+                
+                // Force map refresh
+                setTimeout(() => {
+                  modalMap.invalidateSize();
+                }, 100);
+              });
+
+              treeGrid.appendChild(treeCard);
+            });
+
+            // If no trees found
+            if (Object.keys(treeCounts).length === 0) {
+              treeGrid.innerHTML = '<p>No trees found in this area</p>';
+            }
+
+            // Add back button handler
+            backButton.addEventListener('click', () => {
+              treeGrid.style.display = 'grid';
+              treeDetails.style.display = 'none';
+              backButton.style.display = 'none';
+              
+              // Restore all tree markers
+              modalMap.eachLayer((layer) => {
+                if (layer instanceof L.Marker) {
+                  modalMap.removeLayer(layer);
+                }
+              });
+              
+              // Add markers back with endemic highlighting
+              trees.forEach(tree => {
+                const markerIcon = L.divIcon({
+                  className: 'tree-marker',
+                  iconSize: [12, 12],
+                  html: `<div style="background-color: ${tree.endemic ? '#ff6b6b' : '#0a8806'}; border: 2px solid white; border-radius: 50%; width: 12px; height: 12px; box-shadow: 0 0 4px rgba(0,0,0,0.3);"></div>`
+                });
+                
+                L.marker([tree.lat, tree.lng], {
+                  icon: markerIcon
+                }).addTo(modalMap);
+              });
+              
+              // Force map refresh
+              setTimeout(() => {
+                modalMap.invalidateSize();
+              }, 100);
+            });
+          }
+        } catch (error) {
+          console.error('Error loading trees:', error);
+          treeGrid.innerHTML = '<p>Failed to load trees for this area. Please try again later.</p>';
+        }
+      } catch (outerError) {
+        console.error("Error in showAreaDetails:", outerError);
+        alert("Error displaying area details. Please try again.");
+      }
+    }
+
+    // Close modal
+    function closeModal() {
+      const modal = document.getElementById('areaModal');
+      modal.style.display = 'none';
+      
+      // If modalMap exists, clean it up
+      if (modalMap) {
+        // We don't want to destroy the map completely, as it will be reused
+        // Just make sure it's proper size when shown again
+        setTimeout(() => {
+          if (modalMap) {
+            modalMap.invalidateSize();
+          }
+        }, 100);
+      }
+    }
+
+    // Clear availability overlay
+    function clearAvailabilityOverlay() {
+      if (availabilityOverlay) {
+        availabilityOverlay.clearLayers();
+        if (map.hasLayer(availabilityOverlay)) {
+          map.removeLayer(availabilityOverlay);
+        }
+      }
+      
+      // Reset button state if it exists
+      const availabilityButton = document.getElementById('btnShowAvailability');
+      if (availabilityButton) {
+        availabilityButton.textContent = 'Show Building Availability';
+        availabilityButton.classList.remove('active');
+      }
+    }
+
+    // Show availability overlay for an area
+    function showAvailabilityOverlay(area) {
+      // Initialize map if needed
+      if (!map) {
+        initMap();
+      }
+
+      // Initialize availability overlay if it doesn't exist
+      if (!availabilityOverlay) {
+        availabilityOverlay = L.layerGroup().addTo(map);
+      } else {
+        // Clear existing overlay
+        availabilityOverlay.clearLayers();
+      }
+
+      // Update button state
+      const availabilityButton = document.getElementById('btnShowAvailability');
+      if (availabilityButton) {
+        availabilityButton.textContent = 'Hide Building Availability';
+        availabilityButton.classList.add('active');
+      }
+
+      // Create grid overlay
+      const bounds = L.polygon(area.coordinates).getBounds();
+      const gridSize = 10; // meters
+      const latStep = gridSize / 111111;
+      const lngStep = gridSize / (111111 * Math.cos(bounds.getCenter().lat * Math.PI / 180));
+
+      for (let lat = bounds.getSouth(); lat <= bounds.getNorth(); lat += latStep) {
+        for (let lng = bounds.getWest(); lng <= bounds.getEast(); lng += lngStep) {
+          const cell = L.rectangle([[lat, lng], [lat + latStep, lng + lngStep]], {
+            color: '#0a8806',
+            weight: 1,
+            fillOpacity: 0.2
+          }).addTo(availabilityOverlay);
+
+          // Add hover effect
+          cell.on('mouseover', function(e) {
+            this.setStyle({
+              fillOpacity: 0.4
+            });
+          });
+
+          cell.on('mouseout', function(e) {
+            this.setStyle({
+              fillOpacity: 0.2
+            });
+          });
+        }
+      }
+    }
+
+    // Check building availability
+    function checkBuildingAvailability(area) {
+      // Initialize map if needed
+      if (!map) {
+        initMap();
+      }
+
+      // Initialize availability overlay if it doesn't exist
+      if (!availabilityOverlay) {
+        availabilityOverlay = L.layerGroup().addTo(map);
+      }
+      
+      // Set current area
+      currentArea = area;
+      
+      // Reset UI
+      document.getElementById('buildingForm').style.display = 'block';
+      document.getElementById('buildingInstructions').style.display = 'none';
+      document.getElementById('buildingResult').style.display = 'none';
+      document.getElementById('structureSize').value = '';
+      document.getElementById('projectDescription').value = '';
+      
+      // First show the modal so it's in front of the map
+      const buildingModal = document.getElementById('buildingModal');
+      buildingModal.style.display = 'block';
+      
+      // Make sure z-index is set correctly
+      buildingModal.style.zIndex = '2000';
+      document.querySelector('.building-modal-content').style.zIndex = '2001';
+      
+      // Then handle the map
+      const mapContainer = document.getElementById('mapContainer');
+      mapContainer.style.display = 'block';
+      mapContainer.style.zIndex = '1';
+      
+      // Initialize map if needed
+      if (!map) {
+        const loadingElement = document.getElementById('mapLoading');
+        if (loadingElement) loadingElement.style.display = 'flex';
+        
+        initMap().then(() => {
+          if (loadingElement) loadingElement.style.display = 'none';
+          
+          // Initialize layers if not already done
+          if (!drawnItems) drawnItems = new L.FeatureGroup().addTo(map);
+          if (!treeMarkers) treeMarkers = L.layerGroup().addTo(map);
+          if (!buildingLayer) buildingLayer = L.featureGroup().addTo(map);
+          
+          // Show area on map
+          const polygon = L.polygon(area.coordinates, {color: '#0a8806'});
+          drawnItems.clearLayers();
+          drawnItems.addLayer(polygon);
+          map.fitBounds(polygon.getBounds());
+          
+          // Set active area
+          activeArea = area;
+          
+          // Force map refresh
+          setTimeout(() => {
+            map.invalidateSize();
+          }, 200);
+        }).catch(error => {
+          console.error('Error initializing map:', error);
+          if (loadingElement) loadingElement.style.display = 'none';
+          alert('Error loading map. Please try again later.');
+        });
+      } else {
+        // Make sure all necessary layers are initialized
+        if (!drawnItems) drawnItems = new L.FeatureGroup().addTo(map);
+        if (!treeMarkers) treeMarkers = L.layerGroup().addTo(map);
+        if (!buildingLayer) buildingLayer = L.featureGroup().addTo(map);
+        
+        // Show area on map
+        const polygon = L.polygon(area.coordinates, {color: '#0a8806'});
+        drawnItems.clearLayers();
+        drawnItems.addLayer(polygon);
+        map.fitBounds(polygon.getBounds());
+        
+        // Set active area
+        activeArea = area;
+        
+        // Force map refresh
+        setTimeout(() => {
+          map.invalidateSize();
+        }, 200);
+      }
+      
+      // Reset the "Use Selected Location" button
+      const useSelectedCellContainer = document.getElementById('useSelectedCellContainer');
+      if (useSelectedCellContainer) {
+        useSelectedCellContainer.innerHTML = '';
+      }
+      
+      // Stop propagation of click event
+      if (event) {
+        event.stopPropagation();
+      }
+      
+      // Clear availability overlay if active
+      clearAvailabilityOverlay();
+    }
+
+    // Close building modal
+    function closeBuildingModal() {
+      document.getElementById('buildingModal').style.display = 'none';
+      
+      // Reset UI state
+      document.getElementById('buildingForm').style.display = 'block';
+      document.getElementById('buildingInstructions').style.display = 'none';
+      document.getElementById('buildingResult').style.display = 'none';
+      
+      // Clean up modal map
+      if (modalMap) {
+        console.log("Cleaning up modal map on close");
+        
+        try {
+          // Remove drawing controls
+          if (modalMap.drawControl) {
+            modalMap.removeControl(modalMap.drawControl);
+            modalMap.drawControl = null;
+          }
+          
+          // Clear layers
+          if (buildingLayer) {
+            buildingLayer.clearLayers();
+          }
+          
+          // Don't destroy the map completely, but make sure it's properly reset
+          modalMap.invalidateSize();
+          
+          // If we're having ongoing issues, we could consider fully removing the map
+          // modalMap.remove();
+          // modalMap = null;
+        } catch (err) {
+          console.error("Error cleaning up map:", err);
+        }
+      }
+      
+      buildingPolygon = null;
+      buildingMode = false;
+    }
+
+    // New functions for direct handling of building availability
+    function startLocationSelection() {
+      console.log("Starting location selection");
+      
+      // Get the structure size from the form
+      const structureSizeInput = document.getElementById('structureSize');
+      const structureSize = parseFloat(structureSizeInput.value);
+      
+      // Validate the size input
+      if (!structureSize || isNaN(structureSize) || structureSize <= 0) {
+        alert('Please enter a valid structure size (in square meters).');
+        return;
+      }
+      
+      // Hide form, show instructions
+      document.getElementById('buildingForm').style.display = 'none';
+      document.getElementById('buildingInstructions').style.display = 'block';
+      
+      // Create a more detailed instruction based on building size
+      const sideLength = Math.sqrt(structureSize).toFixed(1);
+      const sizeCategory = structureSize > 1000 ? 'large' : (structureSize > 200 ? 'medium' : 'small');
+      
+      // Update the instructions to be more specific with size context
+      const instructionsText = document.querySelector('#buildingInstructions p');
+      if (instructionsText) {
+        instructionsText.innerHTML = `
+          <strong>Building Size: ${structureSize} sq. meters</strong> (approximately ${sideLength}m × ${sideLength}m)<br><br>
+          This is a <strong>${sizeCategory}-sized</strong> structure. ${
+            sizeCategory === 'large' ? 'The map has been zoomed out to accommodate this large size.' : 
+            sizeCategory === 'medium' ? 'The map zoom has been adjusted to show a good perspective of this building size.' : 
+            'You can see the details of the surrounding area at this zoom level.'
+          }<br><br>
+          <strong>Instructions:</strong> Click anywhere on the map to place your building. The building will be centered where you click.
+        `;
+      }
+      
+      // Ensure the map container is visible and properly sized
+      const modalMapContainer = document.getElementById('modalMapContainer');
+      if (modalMapContainer) {
+        modalMapContainer.style.display = 'block';
+        modalMapContainer.style.width = '100%';
+        modalMapContainer.style.height = '400px';
+      }
+      
+      // Store the size for later use
+      window.userSpecifiedSize = structureSize;
+      
+      // Calculate appropriate zoom level based on building size
+      let appropriateZoom = 18; // Default high zoom for small buildings
+      
+      if (structureSize > 1000) {
+        appropriateZoom = 16; // Large buildings (>1000 sq m)
+      } else if (structureSize > 500) {
+        appropriateZoom = 17; // Medium buildings (500-1000 sq m)
+      } else if (structureSize > 200) {
+        appropriateZoom = 17.5; // Medium-small buildings (200-500 sq m)
+      }
+      
+      // Store the zoom level for use when initializing the map
+      window.appropriateZoom = appropriateZoom;
+      
+      // Initialize map in modal
+      setupModalMap();
+    }
+    
+    // Helper function to complete the location selection process
+    function completeLocationSelection() {
+      // Make sure the map is visible
+      const mapContainer = document.getElementById('mapContainer');
+      mapContainer.style.display = 'block';
+      
+      // Force map refresh
+      map.invalidateSize();
+      
+      // Hide form, show instructions
+      document.getElementById('buildingForm').style.display = 'none';
+      document.getElementById('buildingInstructions').style.display = 'block';
+      
+      // Initialize building mode
+      enterBuildingMode();
+    }
+    
+    function cancelLocationSelection() {
+      // Return to form
+      document.getElementById('buildingInstructions').style.display = 'none';
+      document.getElementById('buildingForm').style.display = 'block';
+      
+      // Exit building mode
+      exitBuildingMode();
+    }
+    
+    function confirmDrawing() {
+      console.log("Confirming drawing. Building polygon:", buildingPolygon);
+      
+      // Check if building location is set
+      if (!buildingPolygon) {
+        alert('Please place a building location on the map first. Click and drag to draw a rectangle.');
+        return;
+      }
+      
+      // Hide instructions, analyze building
+      document.getElementById('buildingInstructions').style.display = 'none';
+      
+      // Show loading state
+      const buildingResult = document.getElementById('buildingResult');
+      buildingResult.style.display = 'block';
+      buildingResult.innerHTML = '<div style="text-align: center; padding: 20px;"><div class="loading-spinner" style="display: inline-block; margin-bottom: 15px;"></div><p>Analyzing building location...</p></div>';
+      
+      // Analyze the building location and submit for approval
+      submitBuildingRequest();
+    }
+    
+    // New function to submit building request for admin approval
+    async function submitBuildingRequest() {
+      try {
+        console.log("Submitting building request for admin approval");
+        
+        // Validate that buildingPolygon exists
+        if (!buildingPolygon) {
+          throw new Error('No building location has been selected. Please draw a building on the map first.');
+        }
+        
+        // Show loading
+        const buildingResult = document.getElementById('buildingResult');
+        buildingResult.className = 'building-result';
+        buildingResult.innerHTML = '<div style="text-align: center; margin: 20px;"><div class="loading-spinner" style="display: inline-block; margin-bottom: 15px;"></div><p>Submitting request for review...</p></div>';
+        buildingResult.style.display = 'block';
+        
+        // Extract building coordinates
+        let buildingCoords;
+        
+        try {
+          // Handle both rectangle and polygon types
+          if (buildingPolygon instanceof L.Rectangle) {
+            console.log("Building polygon is a rectangle");
+            const bounds = buildingPolygon.getBounds();
+            buildingCoords = [
+              [bounds.getNorthWest().lat, bounds.getNorthWest().lng],
+              [bounds.getNorthEast().lat, bounds.getNorthEast().lng],
+              [bounds.getSouthEast().lat, bounds.getSouthEast().lng],
+              [bounds.getSouthWest().lat, bounds.getSouthWest().lng]
+            ];
+          } else {
+            console.log("Building polygon is a standard polygon");
+            buildingCoords = buildingPolygon.getLatLngs()[0].map(latlng => [latlng.lat, latlng.lng]);
+          }
+        } catch (err) {
+          console.error("Error extracting building coordinates:", err);
+          throw new Error("Could not determine building coordinates. Please try drawing again.");
+        }
+        
+        // Get form data
+        const structureType = document.getElementById('structureType').value;
+        const structureSize = document.getElementById('structureSize').value;
+        const projectDescription = document.getElementById('projectDescription').value;
+        
+        // Prepare request data
+        const requestData = {
+          user_id: localStorage.getItem('user_id'),
+          area_id: currentArea.id,
+          structure_type: structureType,
+          structure_size: structureSize,
+          project_description: projectDescription,
+          coordinates: buildingCoords,
+          status: 'pending'
+        };
+        
+        console.log("Request data:", requestData);
+        
+        // Submit to server
+        const response = await fetch('submit_building_request.php', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('authToken')}`,
+            'X-User-ID': localStorage.getItem('user_id')
+          },
+          body: JSON.stringify(requestData)
+        });
+        
+        // Get response text first to check for errors
+        const responseText = await response.text();
+        let result;
+        
+        // Try to parse as JSON
+        try {
+          result = JSON.parse(responseText);
+        } catch (err) {
+          console.error("Error parsing server response:", err);
+          console.log("Server response text:", responseText);
+          throw new Error("Server returned an invalid response. Please check the console for details.");
+        }
+        
+        // Check response status
+        if (!response.ok || !result.success) {
+          throw new Error(result.message || `Server returned ${response.status}: ${response.statusText}`);
+        }
+        
+        // Show success message
+        buildingResult.className = 'building-result result-allowed';
+        buildingResult.innerHTML = `
+          <h3>Request Submitted Successfully</h3>
+          <div class="result-banner green-result">
+            <i class="fas fa-check-circle"></i>
+            <strong>Request ID: ${result.request_id || 'Pending'}</strong>
+          </div>
+          <p>Your building availability request has been submitted for review by our mappers and administrators.</p>
+          <p>You will receive an email notification once your request has been processed.</p>
+          <p>You can view the status of your request in the "My Requests" section.</p>
+          
+          <div style="text-align: center; margin-top: 20px;">
+            <button onclick="viewBuildingRequests()" class="btn-save" style="margin: 10px; display: inline-block;">
+              View My Requests
+            </button>
+            <button onclick="closeResultAndShowForm()" class="btn-save" style="background-color: #6c757d; margin: 10px; display: inline-block;">
+              Close
+            </button>
+          </div>
+        `;
+        
+        // Notify user about next steps
+        setTimeout(() => {
+          alert("Your building availability request has been submitted for review. You will receive an email notification when it's processed.");
+        }, 500);
+        
+      } catch (error) {
+        console.error("Error in submitBuildingRequest:", error);
+        
+        // Show error message
+        const buildingResult = document.getElementById('buildingResult');
+        buildingResult.className = 'building-result result-denied';
+        buildingResult.innerHTML = `
+          <h3>Error Submitting Request</h3>
+          <div class="result-banner red-result">
+            <i class="fas fa-times-circle"></i>
+            <strong>Error</strong>
+          </div>
+          <p>There was an error submitting your building request: ${error.message}</p>
+          <p>Please try again later or contact support.</p>
+          
+          <div style="text-align: center; margin-top: 20px;">
+            <button onclick="closeResultAndShowForm()" class="btn-save" style="background-color: #6c757d; margin: 15px auto; padding: 10px 20px; display: inline-block;">
+              Back to Form
+            </button>
+          </div>
+        `;
+        buildingResult.style.display = 'block';
+      }
+    }
+
+    // Function to view all building requests for the current user
+    function viewBuildingRequests() {
+      // Close the current modal
+      closeBuildingModal();
+      
+      // Show building requests modal
+      showBuildingRequestsModal();
+    }
+
+    // Function to show building requests modal
+    async function showBuildingRequestsModal() {
+      try {
+        // Create modal if it doesn't exist
+        let requestsModal = document.getElementById('buildingRequestsModal');
+        
+        if (!requestsModal) {
+          // Create modal element
+          requestsModal = document.createElement('div');
+          requestsModal.id = 'buildingRequestsModal';
+          requestsModal.className = 'building-modal';
+          
+          requestsModal.innerHTML = `
+            <div class="building-modal-content">
+              <span class="close-modal" onclick="closeBuildingRequestsModal()">&times;</span>
+              <h2>My Building Requests</h2>
+              <div id="requestsLoading" style="text-align: center; padding: 20px;">
+                <div class="loading-spinner" style="display: inline-block; margin-bottom: 15px;"></div>
+                <p>Loading your requests...</p>
+              </div>
+              <div id="requestsList" style="display: none;"></div>
+            </div>
+          `;
+          
+          // Add to document
+          document.body.appendChild(requestsModal);
+        }
+        
+        // Show modal
+        requestsModal.style.display = 'block';
+        
+        // Load requests
+        await loadBuildingRequests();
+        
+      } catch (error) {
+        console.error("Error showing building requests modal:", error);
+        alert("Error loading building requests. Please try again later.");
+      }
+    }
+
+    // Function to load building requests from server
+    async function loadBuildingRequests() {
+      try {
+        const requestsLoading = document.getElementById('requestsLoading');
+        const requestsList = document.getElementById('requestsList');
+        
+        requestsLoading.style.display = 'block';
+        requestsList.style.display = 'none';
+        
+        // Fetch requests from server
+        const response = await fetch('get_building_requests.php', {
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('authToken')}`,
+            'X-User-ID': localStorage.getItem('user_id')
+          }
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+        }
+        
+        const result = await response.json();
+        if (!result.success) {
+          throw new Error(result.message || "Failed to load requests");
+        }
+        
+        // Display requests
+        requestsLoading.style.display = 'none';
+        requestsList.style.display = 'block';
+        
+        if (!result.requests || result.requests.length === 0) {
+          requestsList.innerHTML = `
+            <div style="text-align: center; padding: 20px; color: #666;">
+              <p>You don't have any building requests yet.</p>
+            </div>
+          `;
+          return;
+        }
+        
+        // Sort requests by date (newest first)
+        const requests = result.requests.sort((a, b) => 
+          new Date(b.created_at) - new Date(a.created_at)
+        );
+        
+        // Create HTML for requests
+        let requestsHTML = `
+          <div class="requests-list">
+        `;
+        
+        requests.forEach(request => {
+          const statusClass = getStatusClass(request.status);
+          const statusText = getStatusText(request.status);
+          
+          requestsHTML += `
+            <div class="request-card ${statusClass}" data-id="${request.id}">
+              <div class="request-header">
+                <div class="request-title">
+                  <strong>${request.structure_type}</strong> (${request.structure_size} sq. meters)
+                </div>
+                <div class="request-status ${statusClass}">
+                  ${statusText}
+                </div>
+              </div>
+              <div class="request-details">
+                <div><strong>Submitted:</strong> ${new Date(request.created_at).toLocaleDateString()}</div>
+                <div><strong>Project:</strong> ${request.project_description}</div>
+                ${request.admin_notes ? `<div><strong>Admin Notes:</strong> ${request.admin_notes}</div>` : ''}
+              </div>
+              <div class="request-actions">
+                <button onclick="viewRequestDetails(${request.id})" class="btn-view-details">View Details</button>
+              </div>
+            </div>
+          `;
+        });
+        
+        requestsHTML += `</div>`;
+        
+        // Add request status legend
+        requestsHTML += `
+          <div class="status-legend" style="margin-top: 20px; padding: 10px; background: #f8f9fa; border-radius: 4px;">
+            <h4 style="margin-top: 0;">Request Status Legend:</h4>
+            <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+              <div style="display: flex; align-items: center;">
+                <div style="width: 15px; height: 15px; background-color: #ffc107; border-radius: 50%; margin-right: 5px;"></div>
+                <span>Pending Review</span>
+              </div>
+              <div style="display: flex; align-items: center;">
+                <div style="width: 15px; height: 15px; background-color: #0a8806; border-radius: 50%; margin-right: 5px;"></div>
+                <span>Approved</span>
+              </div>
+              <div style="display: flex; align-items: center;">
+                <div style="width: 15px; height: 15px; background-color: #dc3545; border-radius: 50%; margin-right: 5px;"></div>
+                <span>Rejected</span>
+              </div>
+              <div style="display: flex; align-items: center;">
+                <div style="width: 15px; height: 15px; background-color: #17a2b8; border-radius: 50%; margin-right: 5px;"></div>
+                <span>In Progress</span>
+              </div>
+            </div>
+          </div>
+        `;
+        
+        requestsList.innerHTML = requestsHTML;
+        
+      } catch (error) {
+        console.error("Error loading building requests:", error);
+        
+        const requestsLoading = document.getElementById('requestsLoading');
+        const requestsList = document.getElementById('requestsList');
+        
+        requestsLoading.style.display = 'none';
+        requestsList.style.display = 'block';
+        requestsList.innerHTML = `
+          <div class="result-banner red-result">
+            <i class="fas fa-times-circle"></i>
+            <strong>Error loading requests</strong>
+          </div>
+          <p>There was an error loading your building requests: ${error.message}</p>
+          <p>Please try again later or contact support.</p>
+        `;
+      }
+    }
+
+    // Helper function to get status class
+    function getStatusClass(status) {
+      switch(status.toLowerCase()) {
+        case 'approved':
+          return 'status-approved';
+        case 'rejected':
+          return 'status-rejected';
+        case 'in_progress':
+        case 'in progress':
+          return 'status-inprogress';
+        case 'pending':
+        default:
+          return 'status-pending';
+      }
+    }
+
+    // Helper function to get status text
+    function getStatusText(status) {
+      switch(status.toLowerCase()) {
+        case 'approved':
+          return 'Approved';
+        case 'rejected':
+          return 'Rejected';
+        case 'in_progress':
+        case 'in progress':
+          return 'In Progress';
+        case 'pending':
+        default:
+          return 'Pending Review';
+      }
+    }
+
+    // Function to view request details
+    function viewRequestDetails(requestId) {
+      alert(`Viewing details for request #${requestId} - This feature will show a detailed view of the request including the map location and approval status.`);
+      // This would typically load the request details and show a detailed modal
+    }
+
+    // Function to close building requests modal
+    function closeBuildingRequestsModal() {
+      const modal = document.getElementById('buildingRequestsModal');
+      if (modal) {
+        modal.style.display = 'none';
+      }
+    }
+
+    // Original analyzeBuildingLocation renamed to previewBuildingLocation (for preview only)
+    async function analyzeBuildingLocation() {
+      try {
+        console.log("Starting building location analysis (preview only)");
+        
+        // Validate that buildingPolygon exists
+        if (!buildingPolygon) {
+          throw new Error('No building location has been selected. Please draw a building on the map first.');
+        }
+        
+        console.log("Building polygon exists:", buildingPolygon);
+        
+        // Show loading
+        const buildingResult = document.getElementById('buildingResult');
+        buildingResult.className = 'building-result';
+        buildingResult.innerHTML = '<div style="text-align: center; margin: 20px;"><div class="loading-spinner" style="display: inline-block; margin-bottom: 15px;"></div><p>Analyzing location...</p></div>';
+        buildingResult.style.display = 'block';
+        
+        // Extract building coordinates
+        let buildingCoords;
+        
+        // Rest of the existing analysis code stays the same...
+        try {
+          // Handle both rectangle and polygon types
+          if (buildingPolygon instanceof L.Rectangle) {
+            console.log("Building polygon is a rectangle");
+            const bounds = buildingPolygon.getBounds();
+            buildingCoords = [
+              [bounds.getNorthWest().lat, bounds.getNorthWest().lng],
+              [bounds.getNorthEast().lat, bounds.getNorthEast().lng],
+              [bounds.getSouthEast().lat, bounds.getSouthEast().lng],
+              [bounds.getSouthWest().lat, bounds.getSouthWest().lng]
+            ];
+          } else {
+            console.log("Building polygon is a standard polygon");
+            buildingCoords = buildingPolygon.getLatLngs()[0].map(latlng => [latlng.lat, latlng.lng]);
+          }
+          
+          console.log("Building coordinates:", buildingCoords);
+        } catch (err) {
+          console.error("Error extracting building coordinates:", err);
+          throw new Error("Could not determine building coordinates. Please try drawing again.");
+        }
+
+        // Add a submit request button to the result
+        buildingResult.innerHTML = `
+          <h3>Building Location Analysis (Preview)</h3>
+          <p>Your building location has been analyzed. This is a preview of the proposed building location.</p>
+          <p>To proceed, please submit this location for review by our mappers and administrators.</p>
+          
+          <div style="text-align: center; margin-top: 20px;">
+            <button onclick="submitBuildingRequest()" class="btn-save" style="margin: 10px; display: inline-block;">
+              Submit for Review
+            </button>
+            <button onclick="closeResultAndShowForm()" class="btn-save" style="background-color: #6c757d; margin: 10px; display: inline-block;">
+              Cancel
+            </button>
+          </div>
+        `;
+        
+      } catch (error) {
+        console.error("Error in analyzeBuildingLocation:", error);
+        
+        // Show error message
+        const buildingResult = document.getElementById('buildingResult');
+        buildingResult.className = 'building-result result-denied';
+        buildingResult.innerHTML = `
+          <h3>Error Analyzing Location</h3>
+          <div class="result-banner red-result">
+            <i class="fas fa-times-circle"></i>
+            <strong>Error</strong>
+          </div>
+          <p>There was an error analyzing your building location: ${error.message}</p>
+          <p>Please try again later or contact support.</p>
+          
+          <div style="text-align: center; margin-top: 20px;">
+            <button onclick="closeResultAndShowForm()" class="btn-save" style="background-color: #6c757d; margin: 15px auto; padding: 10px 20px; display: inline-block;">
+              Back to Form
+            </button>
+          </div>
+        `;
+        buildingResult.style.display = 'block';
+      }
+    }
+
+    // Handle cell click - modified to use new UI
+    function handleCellClick(cellData) {
+      // Create temporary building polygon
+      if (!buildingLayer) {
+        buildingLayer = L.featureGroup().addTo(map);
+      } else {
+        buildingLayer.clearLayers();
+        if (!map.hasLayer(buildingLayer)) {
+          buildingLayer.addTo(map);
+        }
+      }
+      
+      // Create building polygon from cell bounds
+      buildingPolygon = L.rectangle(cellData.bounds, {
+        color: '#ff7800',
+        weight: 2,
+        opacity: 0.8,
+        fillOpacity: 0.3,
+        className: 'building-zone'
+      });
+      
+      buildingLayer.addLayer(buildingPolygon);
+      
+      // Open building modal with pre-filled info
+      currentArea = activeOverlayArea;
+      
+      // Reset UI
+      document.getElementById('buildingForm').style.display = 'block';
+      document.getElementById('buildingInstructions').style.display = 'none';
+      document.getElementById('buildingResult').style.display = 'none';
+      
+      // Show modal
+      document.getElementById('buildingModal').style.display = 'block';
+      
+      // Show Use Selected Cell button
+      const useSelectedCellContainer = document.getElementById('useSelectedCellContainer');
+      useSelectedCellContainer.innerHTML = `
+        <button id="btnUseSelectedCell" class="btn-save" style="display: block; width: 100%; padding: 15px; font-size: 16px; font-weight: bold; cursor: pointer; background-color: #ff7800;">
+          Use Selected Map Location
+        </button>
+      `;
+      
+      // Add event listener to the button
+      document.getElementById('btnUseSelectedCell').addEventListener('click', function() {
+        // Hide form, analyze directly
+        document.getElementById('buildingForm').style.display = 'none';
+        analyzeBuildingLocation();
+      });
+    }
+
+    // Get trees in area
+    async function getTreesInArea(area) {
+      try {
+        const response = await fetch(`get_trees.php`, {
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('authToken')}`,
+            'X-User-ID': localStorage.getItem('user_id')
+          }
+        });
+
+        const data = await response.json();
+        if (data.success) {
+          return data.data.filter(tree => isPointInPolygon([tree.lat, tree.lng], area.coordinates));
+        }
+        return [];
+      } catch (error) {
+        console.error('Error loading trees:', error);
+        throw new Error('Failed to load trees for analysis');
+      }
+    }
+
+    // Close modal when clicking outside (updated to handle both modals)
+    window.onclick = function(event) {
+      const areaModal = document.getElementById('areaModal');
+      const buildingModal = document.getElementById('buildingModal');
+      
+      if (event.target === areaModal) {
+        closeModal();
+      } else if (event.target === buildingModal) {
+        closeBuildingModal();
+      }
+    }
+
+    // Enter building mode
+    function enterBuildingMode() {
+      buildingMode = true;
+      
+      // Make sure map is initialized
+      if (!map) {
+        console.error("Map is not initialized");
+        alert("Map is not initialized. Please try again after the map loads.");
+        return;
+      }
+      
+      // Remove any existing draw controls
+      if (drawControl && map.drawControl) {
+        map.removeControl(drawControl);
+        map.drawControl = null;
+      }
+      
+      // Clear existing drawn items if they exist
+      if (drawnItems) {
+        drawnItems.clearLayers();
+      } else {
+        drawnItems = new L.FeatureGroup().addTo(map);
+      }
+      
+      // Make sure map is fully visible
+      const mapContainer = document.getElementById('mapContainer');
+      mapContainer.style.display = 'block';
+      
+      // Force map refresh
+      setTimeout(() => {
+        map.invalidateSize();
+      }, 100);
+      
+      // Initialize building layer if needed
+      if (!buildingLayer) {
+        buildingLayer = L.featureGroup().addTo(map);
+      } else {
+        buildingLayer.clearLayers();
+        if (!map.hasLayer(buildingLayer)) {
+          buildingLayer.addTo(map);
+        }
+      }
+      
+      // Add rectangle draw control
+      drawControl = new L.Control.Draw({
+        draw: {
+          polygon: false,
+          circle: false,
+          circlemarker: false,
+          marker: false,
+          polyline: false,
+          rectangle: {
+            shapeOptions: {
+              color: '#ff7800',
+              weight: 2,
+              opacity: 0.8,
+              fillOpacity: 0.3,
+              className: 'building-zone'
+            }
+          }
+        },
+        edit: {
+          featureGroup: buildingLayer,
+          remove: true
+        }
+      });
+      
+      map.addControl(drawControl);
+      map.drawControl = drawControl;
+      
+      console.log("Drawing control added to map");
+      
+      // Listen for draw events
+      map.off('draw:created');
+      map.on('draw:created', function(e) {
+        console.log("Shape drawn on map:", e);
+        buildingLayer.clearLayers();
+        buildingPolygon = e.layer;
+        buildingLayer.addLayer(buildingPolygon);
+      });
+    }
+
+    // Exit building mode
+    function exitBuildingMode() {
+      buildingMode = false;
+      
+      // Remove draw control if it exists
+      if (map && drawControl && map.drawControl) {
+        map.removeControl(drawControl);
+        map.drawControl = null;
+      }
+      
+      // Clear building layer if it exists
+      if (map && buildingLayer && map.hasLayer(buildingLayer)) {
+        buildingLayer.clearLayers();
+      }
+      
+      buildingPolygon = null;
+    }
+
+    // Add some style fixes to ensure the maps display correctly
+    document.addEventListener('DOMContentLoaded', function() {
+      // Add CSS fix for modal map container
+      const styleElement = document.createElement('style');
+      styleElement.textContent = `
+        #modalMapContainer {
+          width: 100%;
+          height: 400px;
+          border: 1px solid #ddd;
+          border-radius: 4px;
+          margin-bottom: 15px;
+          position: relative;
+          z-index: 1;
+        }
+        
+        .leaflet-container {
+          z-index: 1;
+        }
+        
+        .building-modal {
+          z-index: 2000 !important;
+        }
+        
+        .building-modal-content {
+          z-index: 2001 !important;
+        }
+      `;
+      document.head.appendChild(styleElement);
+    });
+
+    function setupModalMap() {
+      console.log("Setting up modal map");
+      
+      try {
+        // Get the container
+        const modalMapContainer = document.getElementById('modalMapContainer');
+        
+        // Force clear any existing map instances
+        if (modalMap) {
+          modalMap.remove();
+          modalMap = null;
+        }
+        
+        // Create a new map instance
+        modalMap = L.map('modalMapContainer', {
+          zoomControl: true,
+          maxZoom: 19,
+          minZoom: 8,
+          preferCanvas: true,
+          wheelDebounceTime: 150
+        });
+        
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+          attribution: '© OpenStreetMap contributors, © CARTO',
+          subdomains: 'abcd',
+          maxZoom: 19,
+          minZoom: 8,
+          tileSize: 256,
+          crossOrigin: true,
+          keepBuffer: 2,
+          updateWhenIdle: true,
+          maxNativeZoom: 18
+        }).addTo(modalMap);
+        
+        console.log("Modal map created");
+        
+        // Add area polygon immediately to ensure it's added
+        const polygon = L.polygon(currentArea.coordinates, {color: '#0a8806'}).addTo(modalMap);
+        modalMap.fitBounds(polygon.getBounds());
+        
+        // Calculate and display statistics
+        const perimeterValue = document.getElementById('perimeterValue');
+        const areaValue = document.getElementById('areaValue');
+        const treeCountValue = document.getElementById('treeCountValue');
+        perimeterValue.textContent = calculatePerimeter(currentArea.coordinates);
+        areaValue.textContent = calculateArea(currentArea.coordinates);
+        treeCountValue.textContent = getTreesInArea(currentArea).length;
+        
+        // Force a map refresh after a short delay
+        setTimeout(() => {
+          modalMap.invalidateSize();
+        }, 300);
+        
+        // Add trees to the map
+        loadTreesForModalMap(currentArea, modalMap);
+        
+        // Get the appropriate zoom level based on building size
+        const appropriateZoom = window.appropriateZoom || 17;
+        console.log(`Using appropriate zoom level: ${appropriateZoom}`);
+        
+        // Fit to bounds with appropriate zoom
+        modalMap.fitBounds(polygon.getBounds());
+        
+        // Set the appropriate zoom after a short delay to let fitBounds complete
+        setTimeout(() => {
+          console.log("Adjusting zoom level");
+          if (modalMap.getZoom() > appropriateZoom) {
+            modalMap.setZoom(appropriateZoom);
+          }
+          
+          // Center on the center of the polygon
+          modalMap.panTo(polygon.getBounds().getCenter());
+        }, 100);
+      } catch (error) {
+        console.error("Error setting up modal map:", error);
+        alert("Error setting up map: " + error.message);
+      }
+    }
+
+    function setupDrawingControls() {
+      // Make sure modalMap exists
+      if (!modalMap) {
+        console.error("Modal map not initialized");
+        return;
+      }
+      
+      // Remove previous drawing controls if they exist
+      if (modalMap.drawControl) {
+        modalMap.removeControl(modalMap.drawControl);
+      }
+      
+      // Create a separate buildingLayer for the modal if it doesn't exist
+      if (!buildingLayer) {
+        buildingLayer = L.featureGroup().addTo(modalMap);
+      } else if (!modalMap.hasLayer(buildingLayer)) {
+        buildingLayer.addTo(modalMap);
+      }
+      
+      // Clear the building layer
+      buildingLayer.clearLayers();
+      
+      // Get the user specified size
+      const userSize = window.userSpecifiedSize || 100; // Default to 100 m² if not specified
+      console.log(`Using user-specified building size: ${userSize} sq meters`);
+      
+      // Calculate appropriate zoom level based on building size
+      // Larger buildings need a more zoomed-out view
+      let appropriateZoom = 18; // Default high zoom for small buildings
+      
+      if (userSize > 1000) {
+        appropriateZoom = 16; // Large buildings (>1000 sq m)
+      } else if (userSize > 500) {
+        appropriateZoom = 17; // Medium buildings (500-1000 sq m)
+      } else if (userSize > 200) {
+        appropriateZoom = 17.5; // Medium-small buildings (200-500 sq m)
+      }
+      
+      // Adjust current zoom if needed
+      const currentZoom = modalMap.getZoom();
+      if (currentZoom > appropriateZoom) {
+        modalMap.setZoom(appropriateZoom);
+      }
+      
+      // Store existing tree layer groups to keep them visible
+      const existingLayers = [];
+      modalMap.eachLayer(layer => {
+        if (layer instanceof L.LayerGroup && layer !== buildingLayer) {
+          existingLayers.push(layer);
+        }
+      });
+      
+      // Remove existing click handler
+      modalMap.off('click');
+      
+      // Add click handler for placing fixed-size building
+      modalMap.on('click', function(e) {
+        console.log("Map clicked at:", e.latlng);
+        
+        // Clear any existing drawings
+        buildingLayer.clearLayers();
+        
+        // Calculate rectangle dimensions based on square meters
+        // We need to convert square meters to lat/lng degrees
+        const centerLat = e.latlng.lat;
+        const centerLng = e.latlng.lng;
+        
+        // Get the size in meters and calculate dimensions assuming a square shape
+        const sideLength = Math.sqrt(userSize); // in meters
+        
+        // Convert meters to approximate degrees
+        // 111,319.9 meters = 1 degree of latitude
+        // For longitude, need to account for the cosine of latitude
+        const latDegrees = sideLength / 111319.9;
+        const lngDegrees = sideLength / (111319.9 * Math.cos(centerLat * Math.PI / 180));
+        
+        // Calculate corners
+        const northWest = L.latLng(centerLat + latDegrees/2, centerLng - lngDegrees/2);
+        const southEast = L.latLng(centerLat - latDegrees/2, centerLng + lngDegrees/2);
+        
+        // Create a bounds object
+        const bounds = L.latLngBounds(northWest, southEast);
+        
+        // Draw the rectangle
+        buildingPolygon = L.rectangle(bounds, {
+          color: '#ff7800',
+          weight: 2,
+          opacity: 0.8,
+          fillOpacity: 0.3
+        });
+        
+        buildingLayer.addLayer(buildingPolygon);
+        
+        // Add labels to indicate the size
+        // Add a label at the center showing the square meters
+        const sizeLabel = L.marker(bounds.getCenter(), {
+          icon: L.divIcon({
+            className: 'size-label',
+            html: `<div style="background-color: rgba(255,255,255,0.7); padding: 2px 5px; border-radius: 3px; font-weight: bold; color: #ff7800;">${userSize} m²</div>`,
+            iconSize: [80, 20],
+            iconAnchor: [40, 10]
+          })
+        });
+        buildingLayer.addLayer(sizeLabel);
+        
+        // Add width and height dimensions 
+        const widthLabel = L.marker([bounds.getSouth(), bounds.getCenter().lng], {
+          icon: L.divIcon({
+            className: 'dimension-label',
+            html: `<div style="background-color: rgba(255,255,255,0.7); padding: 2px 5px; border-radius: 3px; font-size: 0.8em; color: #ff7800;">${sideLength.toFixed(1)}m</div>`,
+            iconSize: [60, 20],
+            iconAnchor: [30, -5]
+          })
+        });
+        buildingLayer.addLayer(widthLabel);
+        
+        const heightLabel = L.marker([bounds.getCenter().lat, bounds.getWest()], {
+          icon: L.divIcon({
+            className: 'dimension-label',
+            html: `<div style="background-color: rgba(255,255,255,0.7); padding: 2px 5px; border-radius: 3px; font-size: 0.8em; color: #ff7800;">${sideLength.toFixed(1)}m</div>`,
+            iconSize: [60, 20],
+            iconAnchor: [-5, 10]
+          })
+        });
+        buildingLayer.addLayer(heightLabel);
+        
+        // Show area in square meters
+        const actualArea = calculateRectangleArea(bounds);
+        console.log(`Created rectangle with area: ${actualArea.toFixed(2)} sq meters`);
+        
+        // Check if any trees are within the building footprint
+        checkTreesInBuilding(bounds);
+        
+        // Add a confirmation message or visual feedback
+        const instructions = document.getElementById('buildingInstructions');
+        if (instructions) {
+          // Add a success message before the map container
+          const successMessage = document.createElement('div');
+          successMessage.id = 'drawingSuccessMessage';
+          successMessage.style.cssText = 'background-color: #d4edda; color: #155724; padding: 10px; margin-bottom: 15px; border-radius: 4px; text-align: center; font-weight: bold;';
+          successMessage.textContent = `Building location selected (${userSize} sq meters)! Click "Confirm Location" to continue.`;
+          
+          // Remove any existing message
+          const existingMessage = document.getElementById('drawingSuccessMessage');
+          if (existingMessage) {
+            existingMessage.remove();
+          }
+          
+          // Find the map container element
+          const mapContainer = document.getElementById('modalMapContainer');
+          
+          // Insert the message before the map container
+          if (mapContainer && mapContainer.parentNode) {
+            mapContainer.parentNode.insertBefore(successMessage, mapContainer);
+          }
+          
+          // Highlight the confirm button
+          const confirmButton = instructions.querySelector('.btn-save');
+          if (confirmButton) {
+            confirmButton.style.backgroundColor = '#28a745';
+            confirmButton.style.boxShadow = '0 0 10px rgba(40, 167, 69, 0.5)';
+            confirmButton.style.display = 'inline-block';
+          }
+          
+          // Make sure buttons container is visible
+          const buttonsContainer = instructions.querySelector('.building-buttons-container');
+          if (buttonsContainer) {
+            buttonsContainer.style.display = 'flex';
+          }
+        }
+      });
+      
+      console.log("Click handling set up for fixed-size building placement");
+    }
+    
+    // Check if any trees are within the building footprint and highlight them
+    function checkTreesInBuilding(bounds) {
+      let treesInBuilding = 0;
+      let endemicTreesInBuilding = 0;
+      
+      // Look for tree markers in the modal map
+      modalMap.eachLayer(layer => {
+        if (layer instanceof L.LayerGroup) {
+          layer.eachLayer(marker => {
+            if (marker instanceof L.Marker) {
+              const latLng = marker.getLatLng();
+              if (bounds.contains(latLng)) {
+                // Get the marker icon element
+                const iconElement = marker.getElement();
+                if (iconElement) {
+                  // Highlight the marker
+                  iconElement.style.zIndex = 1000;
+                  iconElement.style.transform = iconElement.style.transform + ' scale(1.5)';
+                  
+                  // Count the trees
+                  treesInBuilding++;
+                  
+                  // Check if it's endemic (red marker)
+                  const markerDiv = iconElement.querySelector('div');
+                  if (markerDiv && markerDiv.style.backgroundColor.includes('ff6b6b')) {
+                    endemicTreesInBuilding++;
+                  }
+                }
+              }
+            }
+          });
+        }
+      });
+      
+      // If trees are found, show a notification
+      if (treesInBuilding > 0) {
+        const message = document.getElementById('drawingSuccessMessage');
+        if (message) {
+          message.style.cssText = 'background-color: ' + (endemicTreesInBuilding > 0 ? '#f8d7da' : '#fff3cd') + '; color: ' + (endemicTreesInBuilding > 0 ? '#721c24' : '#856404') + '; padding: 10px; margin-bottom: 15px; border-radius: 4px; text-align: center; font-weight: bold;';
+          message.innerHTML = `
+            <strong>Warning:</strong> Building location affects ${treesInBuilding} tree(s)
+            ${endemicTreesInBuilding > 0 ? `<br><span style="color: #ff0000;">Including ${endemicTreesInBuilding} protected/endemic tree(s)!</span>` : ''}
+            <br>Click "Confirm Location" to analyze impact.
+          `;
+        }
+      }
+    }
+    
+    // Calculate the area of a rectangle in square meters
+    function calculateRectangleArea(bounds) {
+      const northWest = bounds.getNorthWest();
+      const southEast = bounds.getSouthEast();
+      
+      // Calculate width and height in meters
+      const width = L.CRS.EPSG3857.distance(
+        L.latLng(northWest.lat, northWest.lng),
+        L.latLng(northWest.lat, southEast.lng)
+      );
+      
+      const height = L.CRS.EPSG3857.distance(
+        L.latLng(northWest.lat, northWest.lng),
+        L.latLng(southEast.lat, northWest.lng)
+      );
+      
+      return width * height;
+    }
+
+    // Reset modal map if it's not showing properly
+    function resetModalMap() {
+      console.log("Manually resetting modal map");
+      
+      try {
+        // Get the container
+        const modalMapContainer = document.getElementById('modalMapContainer');
+        
+        // Force clear any existing map instances
+        if (modalMap) {
+          modalMap.remove();
+          modalMap = null;
+        }
+        
+        // Create a new map instance
+        modalMap = L.map('modalMapContainer', {
+          zoomControl: true,
+          maxZoom: 19,
+          minZoom: 8
+        });
+        
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '© OpenStreetMap contributors'
+        }).addTo(modalMap);
+        
+        console.log("Map reset successful");
+        
+        // Reset building layer
+        buildingLayer = L.featureGroup().addTo(modalMap);
+        
+        // Show the area boundaries on the modal map
+        if (currentArea && currentArea.coordinates) {
+          // Add the area polygon
+          const areaPoly = L.polygon(currentArea.coordinates, {
+            color: '#0a8806',
+            weight: 2,
+            opacity: 0.8,
+            fillOpacity: 0.2
+          }).addTo(modalMap);
+          
+          // Add trees to the map
+          loadTreesForModalMap(currentArea, modalMap);
+          
+          // Fit to bounds
+          modalMap.fitBounds(areaPoly.getBounds());
+          
+          
+          // Get the appropriate zoom level based on building size
+          const appropriateZoom = window.appropriateZoom || 17;
+          
+          // Set appropriate zoom after a slight delay
+          setTimeout(() => {
+            if (modalMap.getZoom() > appropriateZoom) {
+              modalMap.setZoom(appropriateZoom);
+            }
+          }, 100);
+        }
+        
+        // Add drawing controls
+        setupDrawingControls();
+        
+        alert("Map has been reset successfully.");
+      } catch (error) {
+        console.error("Error resetting map:", error);
+        alert("Error resetting map: " + error.message);
+      }
+    }
+
+    // Load trees for modal map
+    async function loadTreesForModalMap(area, targetMap) {
+      try {
+        console.log("Loading trees for modal map");
+        
+        // Create a loading indicator
+        const loadingDiv = L.DomUtil.create('div', 'tree-loading-indicator');
+        loadingDiv.innerHTML = '<div style="background: rgba(255,255,255,0.8); padding: 5px 10px; border-radius: 5px; font-size: 12px; position: absolute; top: 10px; right: 10px; z-index: 1000;">Loading trees...</div>';
+        document.getElementById('modalMapContainer').appendChild(loadingDiv);
+        
+        // Fetch trees for the area
+        const response = await fetch(`get_trees.php`, {
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('authToken')}`,
+            'X-User-ID': localStorage.getItem('user_id')
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+        }
+
+        const result = await response.json();
+        if (!result.success) {
+          throw new Error(result.message || "Failed to load trees");
+        }
+        
+        // Create a layer group for tree markers if it doesn't exist
+        let treeMarkersModal = new L.LayerGroup();
+        targetMap.addLayer(treeMarkersModal);
+        
+        // Filter trees to only those in this area
+        const treesInArea = result.data.filter(tree => 
+          isPointInPolygon([tree.lat, tree.lng], area.coordinates)
+        );
+        
+        console.log(`Found ${treesInArea.length} trees in area for modal map`);
+        
+        // Add markers for each tree
+        treesInArea.forEach(tree => {
+          // Use different marker color for endemic trees
+          const isEndemic = tree.endemic || 
+            (tree.conservation_status && 
+            (tree.conservation_status.toLowerCase().includes('endangered') || 
+             tree.conservation_status.toLowerCase().includes('protected')));
+
+          // Create marker with div icon
+          const markerIcon = L.divIcon({
+            className: 'tree-marker',
+            iconSize: [12, 12],
+            html: `<div style="background-color: ${isEndemic ? '#ff6b6b' : '#0a8806'}; border: 2px solid white; border-radius: 50%; width: 12px; height: 12px; box-shadow: 0 0 4px rgba(0,0,0,0.3);"></div>`
+          });
+          
+          // Add the marker to the map
+          const marker = L.marker([tree.lat, tree.lng], {
+            icon: markerIcon
+          });
+          
+          // Add popup with tree details
+          marker.bindPopup(`
+            <div style="min-width: 200px;">
+              <strong style="color: ${isEndemic ? '#ff6b6b' : '#0a8806'}; font-size: 1.1em;">${tree.type || 'Tree'}</strong>
+              ${isEndemic ? ' <span style="color: #ff4444; font-weight: bold;">(Protected)</span>' : ''}
+              <br>
+              ${tree.description ? `<p style="margin: 5px 0;">${tree.description}</p>` : ''}
+              <p style="margin: 5px 0; font-size: 0.9em;">Status: ${tree.conservation_status || 'Not specified'}</p>
+              ${tree.photo_path ? `<img src="${tree.photo_path}" alt="Tree Photo" style="width: 100%; border-radius: 4px; margin-top: 5px;">` : ''}
+            </div>
+          `);
+          
+          // Add marker to the layer group
+          treeMarkersModal.addLayer(marker);
+        });
+        
+        // Add a legend to explain tree markers
+        const legend = L.control({ position: 'bottomright' });
+        legend.onAdd = function() {
+          const div = L.DomUtil.create('div', 'info legend');
+          div.style.cssText = 'background: white; padding: 8px; border-radius: 5px; border: 1px solid #ccc;';
+          div.innerHTML = `
+            <div style="font-weight: bold; margin-bottom: 5px;">Trees</div>
+            <div style="display: flex; align-items: center; margin-bottom: 3px;">
+              <div style="background-color: #0a8806; border: 2px solid white; border-radius: 50%; width: 10px; height: 10px; margin-right: 5px;"></div>
+              <span>Regular trees</span>
+            </div>
+            <div style="display: flex; align-items: center;">
+              <div style="background-color: #ff6b6b; border: 2px solid white; border-radius: 50%; width: 10px; height: 10px; margin-right: 5px;"></div>
+              <span>Protected trees</span>
+            </div>
+          `;
+          return div;
+        };
+        legend.addTo(targetMap);
+        
+        // Remove loading indicator
+        if (loadingDiv.parentNode) {
+          loadingDiv.parentNode.removeChild(loadingDiv);
+        }
+        
+      } catch (error) {
+        console.error('Error loading trees for modal map:', error);
+        // Clean up loading indicator if exists
+        const loadingIndicator = document.querySelector('.tree-loading-indicator');
+        if (loadingIndicator && loadingIndicator.parentNode) {
+          loadingIndicator.parentNode.removeChild(loadingIndicator);
+        }
+      }
+    }
+
+    // Add error handling function
+    function showError(message) {
+      const errorDiv = document.createElement('div');
+      errorDiv.className = 'error-message';
+      errorDiv.innerHTML = `
+        <div class="error-content">
+          <span class="error-close">&times;</span>
+          <p>${message}</p>
+        </div>
+      `;
+      document.body.appendChild(errorDiv);
+
+      // Add click handler to close button
+      const closeBtn = errorDiv.querySelector('.error-close');
+      closeBtn.onclick = function() {
+        errorDiv.remove();
+      };
+
+      // Auto-remove after 5 seconds
+      setTimeout(() => {
+        if (document.body.contains(errorDiv)) {
+          errorDiv.remove();
+        }
+      }, 5000);
+    }
+  </script>
+</body>
+</html>
