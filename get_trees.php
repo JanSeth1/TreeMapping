@@ -15,6 +15,11 @@ header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET');
 header('Access-Control-Allow-Headers: Content-Type, Authorization, X-User-ID');
 
+// Debug log for request details
+error_log("Debug: Request received - " . date('Y-m-d H:i:s'));
+error_log("Debug: GET parameters - " . print_r($_GET, true));
+error_log("Debug: Headers - " . print_r(getallheaders(), true));
+
 // Point in polygon check function
 function pointInPolygon($point, $polygon) {
     if (empty($polygon)) {
@@ -94,150 +99,94 @@ try {
     try {
         $conn = openDatabaseConnection();
         error_log("Debug: Database connection successful");
-    } catch (Exception $e) {
-        error_log("Debug: Database connection failed: " . $e->getMessage());
-        throw new Exception("Database connection failed: " . $e->getMessage());
-    }
-    
-    // Initialize parameters array for binding
-    $params = array();
-    $types = '';
-    
-    // Base query to get trees
-    $query = "SELECT DISTINCT t.* FROM trees t";
-    
-    // Start WHERE clause
-    $whereClause = array();
-    
-    // If authentication is provided, verify it
-    if (!empty($authToken) && !empty($userId)) {
-        $query .= " LEFT JOIN users u ON t.user_id = u.id";
-        $query .= " LEFT JOIN auth_tokens at ON u.id = at.user_id";
-        $whereClause[] = "(at.token = ? AND at.user_id = ? AND at.expires_at > NOW())";
-        $types .= "ss";
-        $params[] = $authToken;
-        $params[] = $userId;
-        
-        // Get status filter (only apply if user is authenticated)
-        $status = isset($_GET['status']) ? $_GET['status'] : 'approved';
-        if ($status !== 'all') {
-            $whereClause[] = "t.status = ?";
-            $types .= "s";
-            $params[] = $status;
-        }
-    } else {
-        // If no authentication, just show approved trees
-        $whereClause[] = "t.status = 'approved'";
-    }
-    
-    // Add area filter if area_id is provided
-    if (isset($_GET['area_id']) && !empty($_GET['area_id'])) {
-        error_log("Debug: Processing area_id: " . $_GET['area_id']);
-        
-        // First verify the area exists and get its coordinates
-        $areaQuery = "SELECT coordinates FROM enrolled_areas WHERE id = ? AND user_id = ?";
-        $areaStmt = $conn->prepare($areaQuery);
-        $areaStmt->bind_param("ii", $_GET['area_id'], $userId);
-        $areaStmt->execute();
-        $areaResult = $areaStmt->get_result();
-        $areaData = $areaResult->fetch_assoc();
-        $areaStmt->close();
-        
-        if ($areaData) {
-            error_log("Debug: Area exists, adding area_id filter");
-            $whereClause[] = "t.area_id = ?";
-            $types .= "i";
-            $params[] = $_GET['area_id'];
+
+        // First, let's check if there are any trees at all
+        $countQuery = "SELECT COUNT(*) as total FROM trees";
+        $countResult = $conn->query($countQuery);
+        $totalCount = $countResult->fetch_assoc()['total'];
+        error_log("Debug: Total trees in database: " . $totalCount);
+
+        // Check if the user exists and token is valid
+        if (!empty($authToken) && !empty($userId)) {
+            $authQuery = "SELECT COUNT(*) as valid FROM users WHERE id = ? AND auth_token = ?";
+            $authStmt = $conn->prepare($authQuery);
+            $authStmt->bind_param("is", $userId, $authToken);
+            $authStmt->execute();
+            $authResult = $authStmt->get_result();
+            $isValidAuth = $authResult->fetch_assoc()['valid'] > 0;
+            $authStmt->close();
+            error_log("Debug: Auth validation result: " . ($isValidAuth ? "valid" : "invalid"));
+            
+            if (!$isValidAuth) {
+                error_log("Debug: Invalid authentication. Token: " . substr($authToken, 0, 10) . "..., User ID: " . $userId);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Invalid authentication'
+                ]);
+                exit;
+            }
         } else {
-            error_log("Debug: Area not found or not enrolled: " . $_GET['area_id']);
-            // Return empty result if area doesn't exist
+            error_log("Debug: Missing authentication headers. Auth Token: " . ($authToken ? "present" : "missing") . ", User ID: " . ($userId ? "present" : "missing"));
             echo json_encode([
-                'success' => true,
-                'data' => [],
-                'total' => 0
+                'success' => false,
+                'message' => 'Missing authentication headers'
             ]);
             exit;
         }
-    }
-    
-    // Combine WHERE clauses
-    if (!empty($whereClause)) {
-        $query .= " WHERE " . implode(" AND ", $whereClause);
-    }
-    
-    // Add sorting
-    $query .= " ORDER BY t.created_at DESC";
-    
-    error_log("Debug: Final query: " . $query);
-    error_log("Debug: Parameters: " . print_r($params, true));
-    
-    // Prepare and execute the query
-    $stmt = $conn->prepare($query);
-    if ($stmt === false) {
-        error_log("Debug: Query preparation failed: " . $conn->error);
-        throw new Exception("Query preparation failed: " . $conn->error);
-    }
-    
-    error_log("Debug: Query prepared successfully");
-    
-    // Bind parameters if there are any
-    if (!empty($params)) {
-        $refs = array();
-        $refs[0] = $types;
-        for($i = 0; $i < count($params); $i++) {
-            $refs[$i + 1] = &$params[$i];
+        
+        // Get all trees without complex joins
+        $query = "SELECT * FROM trees WHERE status != 'deleted'";
+        error_log("Debug: Simple query: " . $query);
+        
+        $result = $conn->query($query);
+        if ($result === false) {
+            error_log("Debug: Query failed: " . $conn->error);
+            throw new Exception("Query failed: " . $conn->error);
         }
-        call_user_func_array(array($stmt, 'bind_param'), $refs);
-        error_log("Debug: Parameters bound successfully");
+        
+        $trees = array();
+        $totalTrees = 0;
+        
+        while ($row = $result->fetch_assoc()) {
+            error_log("Debug: Processing tree ID: " . $row['id']);
+            $tree = array(
+                'id' => $row['id'],
+                'type' => $row['type'],
+                'lat' => floatval($row['lat']),
+                'lng' => floatval($row['lng']),
+                'description' => $row['description'],
+                'photo_path' => $row['photo_path'],
+                'endemic' => (bool)$row['endemic'],
+                'conservation_status' => $row['conservation_status'] ?? null,
+                'status' => $row['status'],
+                'user_id' => $row['user_id'],
+                'created_at' => $row['created_at'],
+                'area_id' => $row['area_id']
+            );
+            $trees[] = $tree;
+            $totalTrees++;
+        }
+        
+        error_log("Debug: Found " . $totalTrees . " trees in total");
+        
+        // Return all trees for now (we'll filter by area in the frontend)
+        echo json_encode([
+            'success' => true,
+            'data' => $trees,
+            'total' => count($trees)
+        ]);
+        
+    } catch (Exception $e) {
+        error_log("Debug: Error: " . $e->getMessage());
+        echo json_encode([
+            'success' => false,
+            'message' => $e->getMessage()
+        ]);
+    } finally {
+        if (isset($conn)) {
+            $conn->close();
+        }
     }
-
-    // Execute the query with error checking
-    if (!$stmt->execute()) {
-        error_log("Debug: Query execution failed: " . $stmt->error);
-        throw new Exception("Query execution failed: " . $stmt->error);
-    }
-    error_log("Debug: Query executed successfully");
-    
-    // Get results
-    $result = $stmt->get_result();
-    $trees = array();
-    $totalTrees = 0;
-    
-    while ($row = $result->fetch_assoc()) {
-        $totalTrees++;
-        $tree = array(
-            'id' => $row['id'],
-            'type' => $row['type'],
-            'lat' => floatval($row['lat']),
-            'lng' => floatval($row['lng']),
-            'description' => $row['description'],
-            'photo_path' => $row['photo_path'],
-            'endemic' => (bool)$row['endemic'],
-            'conservation_status' => $row['conservation_status'] ?? null,
-            'status' => $row['status'],
-            'user_id' => $row['user_id'],
-            'created_at' => $row['created_at'],
-            'area_id' => $row['area_id']
-        );
-        $trees[] = $tree;
-    }
-    
-    error_log("Debug: Total trees found: " . $totalTrees);
-    
-    // Return success response with trees data
-    $response = json_encode([
-        'success' => true,
-        'data' => $trees,
-        'total' => count($trees)
-    ]);
-    
-    if ($response === false) {
-        error_log("Debug: JSON encoding failed: " . json_last_error_msg());
-        throw new Exception("JSON encoding failed: " . json_last_error_msg());
-    }
-    
-    echo $response;
-    
 } catch (Exception $e) {
     // Log error
     error_log('Error fetching trees: ' . $e->getMessage());
@@ -263,21 +212,6 @@ try {
         echo $errorResponse;
     }
 } finally {
-    // Clean up resources safely
-    try {
-        // Only close statement if it's a valid object
-        if (isset($stmt) && $stmt instanceof mysqli_stmt) {
-            $stmt->close();
-        }
-        
-        // Only close connection if it's a valid object
-        if (isset($conn) && $conn instanceof mysqli) {
-            $conn->close();
-        }
-    } catch (Exception $e) {
-        error_log('Error during cleanup: ' . $e->getMessage());
-    }
-    
     // End output buffering
     if (ob_get_level() > 0) {
         ob_end_flush();

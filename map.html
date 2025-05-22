@@ -10,7 +10,120 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
   <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+  <!-- Add this line to the <head> section of your map.html file -->
+  <link rel="icon" href="favicon.ico" type="image/x-icon">
   <script>
+    // Global variables
+    let map;
+    let modalMap;
+    let treeMarkers;
+    let drawnItems;
+    let buildingLayer;
+    let buildingPolygon;
+    let buildingMode = false;
+    let availabilityOverlay;
+    let currentArea;
+    let activeArea;
+    let userAreas = [];
+    let userLocationMarker = null;
+    let weatherLayer = null;
+    let currentWeather = null;
+    let gridCells = [];
+    let tooltipElement = null;
+    let activeOverlayArea = null;
+    let gridResolution = 10; // Default grid resolution (meters)
+
+    // Load and display user's areas
+    async function loadUserAreas() {
+      try {
+        const response = await authenticatedFetch('get_areas.php');
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        if (!data.success) {
+          throw new Error(data.message || 'Failed to load areas');
+        }
+
+        userAreas = data.data || [];
+        
+        // Clear existing areas from the map
+        if (drawnItems) {
+          drawnItems.clearLayers();
+        }
+        
+        // Add areas to the map
+        userAreas.forEach(area => {
+          if (area.coordinates && Array.isArray(area.coordinates)) {
+            // Create polygon with enhanced styling
+            const polygon = L.polygon(area.coordinates, {
+              color: '#0a8806',
+              fillColor: '#0a8806',
+              fillOpacity: 0.3,
+              weight: 3,
+              opacity: 0.8
+            });
+            
+            // Add click handler to show area details
+            polygon.on('click', () => showAreaDetails(area));
+            
+            // Add hover effects for better UX
+            polygon.on('mouseover', function() {
+              this.setStyle({
+                fillOpacity: 0.5,
+                weight: 4
+              });
+            });
+            
+            polygon.on('mouseout', function() {
+              this.setStyle({
+                fillOpacity: 0.3,
+                weight: 3
+              });
+            });
+            
+            drawnItems.addLayer(polygon);
+          }
+        });
+
+        // Update the areas list in the sidebar
+        updateAreasList(userAreas);
+
+        // If there are areas, fit the map to show all of them
+        if (userAreas.length > 0) {
+          map.fitBounds(drawnItems.getBounds());
+        }
+
+      } catch (error) {
+        console.error('Error loading areas:', error);
+        showError('Failed to load areas. Please try again later.');
+      }
+    }
+
+    // Update the areas list in the sidebar
+    function updateAreasList(areas) {
+      const areasList = document.getElementById('areasList');
+      if (!areasList) return;
+
+      if (areas.length === 0) {
+        areasList.innerHTML = '<li class="no-areas">No areas enrolled yet. Click "Enroll New Location" to get started.</li>';
+        return;
+      }
+
+      areasList.innerHTML = areas.map(area => `
+        <li class="area-list-item" onclick="showAreaDetails(${JSON.stringify(area).replace(/"/g, '&quot;')})">
+          <div class="area-info">
+            <div class="area-title">Area ${area.id}</div>
+            <div class="area-date">Enrolled: ${new Date(area.created_at).toLocaleDateString()}</div>
+          </div>
+          <button class="btn-view-details" onclick="event.stopPropagation(); showAreaDetails(${JSON.stringify(area).replace(/"/g, '&quot;')})">
+            View Details
+          </button>
+        </li>
+      `).join('');
+    }
+
     // Check authentication on page load
     function checkAuth() {
       const authToken = localStorage.getItem('authToken');
@@ -1254,25 +1367,6 @@
   </div>
 
   <script>
-    // Initialize map variables
-    let map = null;
-    let drawnItems = null;
-    let treeMarkers = null;
-    let availabilityOverlay = null;
-    let buildingPolygon = null;
-    let modalMap = null;
-    let buildingMode = false;
-    let activeArea = null;
-    let userLocationMarker = null;
-    let weatherLayer = null;
-    let currentWeather = null;
-    let buildingLayer = null;
-    let currentArea = null;
-    let gridCells = [];
-    let tooltipElement = null;
-    let activeOverlayArea = null;
-    let gridResolution = 10; // Default grid resolution (meters)
-    
     // Initialize variables
     document.addEventListener('DOMContentLoaded', function() {
       const authToken = localStorage.getItem('authToken');
@@ -1369,32 +1463,120 @@
     async function initMap() {
       if (map) return; // Don't initialize if already exists
       
-      map = L.map('mapContainer', {
-        center: [9.7600, 118.7625],
-        zoom: 13,
-        zoomControl: true,
-        maxZoom: 19,
-        minZoom: 8,
-        preferCanvas: true, // Add canvas rendering for better performance
-        wheelDebounceTime: 150 // Debounce wheel events for smoother zooming
-      });
+      const mapContainer = document.getElementById('mapContainer');
+      const loadingElement = document.getElementById('mapLoading');
       
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-        attribution: '© OpenStreetMap contributors, © CARTO',
-        subdomains: 'abcd',
-        maxZoom: 19,
-        minZoom: 8,
-        tileSize: 256,
-        crossOrigin: true,
-        keepBuffer: 2, // Keep more tiles in buffer for smoother panning
-        updateWhenIdle: true, // Update tiles only when panning ends
-        maxNativeZoom: 18 // Maximum zoom level of the tile server
-      }).addTo(map);
+      // Show loading indicator
+      if (loadingElement) {
+        loadingElement.style.display = 'flex';
+      }
       
-      // Initialize layer groups
-      drawnItems = new L.FeatureGroup().addTo(map);
-      treeMarkers = L.layerGroup().addTo(map);
-      availabilityOverlay = L.layerGroup().addTo(map);
+      try {
+        map = L.map('mapContainer', {
+          center: [9.7600, 118.7625],
+          zoom: 13,
+          zoomControl: true,
+          maxZoom: 19,
+          minZoom: 8,
+          preferCanvas: true,
+          wheelDebounceTime: 150
+        });
+        
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+          attribution: '© OpenStreetMap contributors, © CARTO',
+          subdomains: 'abcd',
+          maxZoom: 19,
+          minZoom: 8,
+          tileSize: 256,
+          crossOrigin: true,
+          keepBuffer: 2,
+          updateWhenIdle: true,
+          maxNativeZoom: 18
+        }).addTo(map);
+        
+        // Initialize layer groups
+        drawnItems = new L.FeatureGroup().addTo(map);
+        treeMarkers = L.layerGroup().addTo(map);
+        availabilityOverlay = L.layerGroup().addTo(map);
+        
+        // Load user's areas
+        const response = await fetch('get_areas.php', {
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('authToken')}`,
+            'X-User-ID': localStorage.getItem('user_id')
+          }
+        });
+        
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        if (!data.success) {
+          throw new Error(data.message || 'Failed to load areas');
+        }
+        
+        // Clear existing areas
+        drawnItems.clearLayers();
+        
+        // Add areas to the map
+        const areas = data.data || [];
+        areas.forEach(area => {
+          if (area.coordinates && Array.isArray(area.coordinates)) {
+            const polygon = L.polygon(area.coordinates, {
+              color: '#0a8806',
+              fillOpacity: 0.2,
+              weight: 2
+            });
+            
+            // Add click handler to show area details
+            polygon.on('click', () => showAreaDetails(area));
+            
+            drawnItems.addLayer(polygon);
+          }
+        });
+        
+        // Update the areas list in the sidebar
+        updateAreasList(areas);
+        
+        // If there are areas, fit the map to show all of them
+        if (areas.length > 0) {
+          map.fitBounds(drawnItems.getBounds());
+        } else {
+          // If no areas, try to get user's location
+          try {
+            const position = await getCurrentPosition();
+            const { latitude, longitude } = position.coords;
+            map.setView([latitude, longitude], 15);
+            
+            // Add user location marker with pulsing effect
+            const userIcon = L.divIcon({
+              className: 'user-location-dot',
+              html: '<div class="pulse"></div>',
+              iconSize: [20, 20]
+            });
+            
+            L.marker([latitude, longitude], {
+              icon: userIcon
+            }).addTo(map);
+          } catch (error) {
+            console.error("Error getting location:", error);
+            // Keep default view if location access fails
+          }
+        }
+        
+        // Show map container
+        mapContainer.style.display = 'block';
+        
+      } catch (error) {
+        console.error('Error initializing map:', error);
+        showError('Failed to initialize map. Please try again later.');
+      } finally {
+        // Hide loading indicator
+        if (loadingElement) {
+          loadingElement.style.display = 'none';
+        }
+      }
     }
 
     // Add weather control to map
@@ -2051,19 +2233,49 @@
 
           // Process and display trees
           if (data.data && Array.isArray(data.data)) {
-              data.data.forEach(tree => {
+              console.log('Processing trees:', data.data.length, 'trees found'); // Debug log
+              
+              // Get current user ID
+              const currentUserId = localStorage.getItem('user_id');
+              
+              // Filter trees to only show those enrolled by the current user within the selected area
+              const treesInArea = data.data.filter(tree => {
+                  if (!tree.lat || !tree.lng) return false;
+                  // Check if tree is in polygon and enrolled by current user
+                  return isPointInPolygon([tree.lat, tree.lng], area.coordinates) && 
+                         tree.user_id == currentUserId;
+              });
+              
+              console.log('User enrolled trees in selected area:', treesInArea.length);
+              
+              treesInArea.forEach(tree => {
                   if (tree.lat && tree.lng) {
+                      console.log('Adding user enrolled tree marker at:', tree.lat, tree.lng); // Debug log
+                      // Create highlighted marker for user's trees
                       const markerIcon = L.divIcon({
                           className: 'tree-marker',
-                          iconSize: [12, 12],
-                          html: `<div style="background-color: ${tree.endemic ? '#ff6b6b' : '#0a8806'}; border: 2px solid white; border-radius: 50%; width: 12px; height: 12px; box-shadow: 0 0 4px rgba(0,0,0,0.3);"></div>`
+                          iconSize: [14, 14], // Slightly larger for emphasis
+                          html: `<div style="background-color: ${tree.endemic ? '#ff6b6b' : '#0a8806'}; 
+                                 border: 3px solid #ffff00; border-radius: 50%; 
+                                 width: 14px; height: 14px; 
+                                 box-shadow: 0 0 8px rgba(255,255,0,0.7);"></div>`
                       });
                       
-                      L.marker([tree.lat, tree.lng], {
+                      const marker = L.marker([tree.lat, tree.lng], {
                           icon: markerIcon
-                      }).addTo(treeMarkers);
+                      });
+                      
+                      // Make marker clickable to show details
+                      marker.on('click', () => {
+                          showTreeDetails(tree, area);
+                      });
+                      
+                      treeMarkers.addLayer(marker);
                   }
               });
+              console.log('User tree markers added to map'); // Debug log
+          } else {
+              console.log('No trees found in data or invalid data format:', data); // Debug log
           }
 
           return data.data || [];
@@ -2086,27 +2298,53 @@
 
     // Helper function to check if a point is inside a polygon
     function isPointInPolygon(point, polygon) {
-      console.log("Checking if point is in polygon:", point, polygon);
-      
       // Ensure we have valid inputs
-      if (!point || !polygon || !Array.isArray(point) || !Array.isArray(polygon) || polygon.length < 3) {
+      if (!point || !polygon || !Array.isArray(polygon) || polygon.length < 3) {
         console.error("Invalid inputs for isPointInPolygon");
         return false;
       }
       
-      const x = point[0], y = point[1];
-      let inside = false;
-      
-      for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-        const xi = polygon[i][0], yi = polygon[i][1];
-        const xj = polygon[j][0], yj = polygon[j][1];
-        
-        const intersect = ((yi > y) !== (yj > y))
-          && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
-        if (intersect) inside = !inside;
+      // Convert point to [lat, lng] format
+      let lat, lng;
+      if (Array.isArray(point)) {
+        [lat, lng] = point.map(parseFloat);
+      } else {
+        lat = parseFloat(point.lat);
+        lng = parseFloat(point.lng);
       }
       
-      console.log("Point is inside polygon:", inside);
+      if (isNaN(lat) || isNaN(lng)) {
+        console.error("Invalid point coordinates:", point);
+        return false;
+      }
+      
+      // Ray casting algorithm
+      let inside = false;
+      for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+        const [xi, yi] = polygon[i];
+        const [xj, yj] = polygon[j];
+        
+        if (isNaN(xi) || isNaN(yi) || isNaN(xj) || isNaN(yj)) {
+          console.error("Invalid polygon coordinates:", polygon[i], polygon[j]);
+          continue;
+        }
+        
+        // Check if point is on the boundary
+        if ((yi === lng && xi === lat) || (yj === lng && xj === lat)) {
+          return true;
+        }
+        
+        // Ray casting algorithm
+        if ((yi > lng) !== (yj > lng)) {
+          const slope = (xj - xi) / (yj - yi);
+          const intersectX = xi + slope * (lng - yi);
+          
+          if (lat <= intersectX) {
+            inside = !inside;
+          }
+        }
+      }
+      
       return inside;
     }
 
@@ -2137,6 +2375,8 @@
     // Show area details in modal
     async function showAreaDetails(area) {
       try {
+        console.log('Showing details for area:', area);
+        
         const modal = document.getElementById('areaModal');
         const modalTitle = document.getElementById('modalTitle');
         const perimeterValue = document.getElementById('perimeterValue');
@@ -2145,6 +2385,16 @@
         const treeGrid = document.getElementById('treeGrid');
         const treeDetails = document.getElementById('treeDetails');
         const backButton = document.getElementById('backToTypes');
+        
+        // Convert area coordinates to array format and ensure they're numbers
+        area.coordinates = area.coordinates.map(coord => {
+          if (Array.isArray(coord)) {
+            return [parseFloat(coord[0]), parseFloat(coord[1])];
+          } else {
+            return [parseFloat(coord.lat), parseFloat(coord.lng)];
+          }
+        });
+        console.log('Formatted area coordinates:', area.coordinates);
 
         modalTitle.textContent = `Area Details`;
         modal.style.display = 'block';
@@ -2205,7 +2455,7 @@
 
         try {
           // Safely fetch tree data with better error handling
-          const response = await fetch(`get_trees.php`, {
+          const response = await fetch(`get_trees.php?area_id=${area.id}`, {
             headers: {
               'Authorization': `Bearer ${localStorage.getItem('authToken')}`,
               'X-User-ID': localStorage.getItem('user_id')
@@ -2222,12 +2472,20 @@
           }
           
           const data = await response.json();
+          console.log('Tree data received:', data); // Debug log
           
           if (data.success) {
-            const trees = data.data.filter(tree => 
-              isPointInPolygon([tree.lat, tree.lng], area.coordinates)
-            );
+            // Filter trees to only include those within the area's coordinates
+            const trees = data.data.filter(tree => {
+              const isInside = isPointInPolygon(
+                { lat: tree.lat, lng: tree.lng },
+                area.coordinates
+              );
+              console.log(`Tree at ${tree.lat},${tree.lng} is ${isInside ? 'inside' : 'outside'} area`);
+              return isInside;
+            });
 
+            console.log(`Found ${trees.length} trees inside the area out of ${data.data.length} total trees`);
             treeCountValue.textContent = trees.length;
             treeGrid.innerHTML = '';
 
@@ -3211,6 +3469,10 @@
     // Get trees in area
     async function getTreesInArea(area) {
       try {
+        console.log('Getting trees for area:', area);
+        console.log('Area coordinates:', area.coordinates);
+        
+        // First, let's get all trees
         const response = await fetch(`get_trees.php`, {
           headers: {
             'Authorization': `Bearer ${localStorage.getItem('authToken')}`,
@@ -3219,10 +3481,47 @@
         });
 
         const data = await response.json();
-        if (data.success) {
-          return data.data.filter(tree => isPointInPolygon([tree.lat, tree.lng], area.coordinates));
+        console.log('API Response:', data);
+        
+        if (!data.success) {
+          console.error('API Error:', data.message);
+          throw new Error(data.message || 'Failed to load trees');
         }
-        return [];
+
+        if (!Array.isArray(data.data)) {
+          console.error('Invalid data format:', data);
+          throw new Error('Invalid data format received from server');
+        }
+
+        console.log('All trees received:', data.data.length);
+        
+        // Ensure area coordinates are in the correct format
+        const formattedAreaCoords = area.coordinates.map(coord => 
+          Array.isArray(coord) ? coord : [parseFloat(coord.lat), parseFloat(coord.lng)]
+        );
+        
+        // Filter trees based on coordinates
+        const treesInArea = data.data.filter(tree => {
+          // Ensure tree coordinates are valid numbers
+          const treeLat = parseFloat(tree.lat);
+          const treeLng = parseFloat(tree.lng);
+          
+          if (isNaN(treeLat) || isNaN(treeLng)) {
+            console.error('Invalid tree coordinates:', tree);
+            return false;
+          }
+          
+          const isInside = isPointInPolygon(
+            [treeLat, treeLng],
+            formattedAreaCoords
+          );
+          
+          console.log(`Tree ${tree.id} at ${treeLat},${treeLng} is ${isInside ? 'inside' : 'outside'} area`);
+          return isInside;
+        });
+        
+        console.log(`Found ${treesInArea.length} trees inside area out of ${data.data.length} total trees`);
+        return treesInArea;
       } catch (error) {
         console.error('Error loading trees:', error);
         throw new Error('Failed to load trees for analysis');
@@ -3771,7 +4070,7 @@
         document.getElementById('modalMapContainer').appendChild(loadingDiv);
         
         // Fetch trees for the area
-        const response = await fetch(`get_trees.php`, {
+        const response = await fetch(`get_trees.php?area_id=${area.id}`, {
           headers: {
             'Authorization': `Bearer ${localStorage.getItem('authToken')}`,
             'X-User-ID': localStorage.getItem('user_id')
@@ -3893,6 +4192,49 @@
           errorDiv.remove();
         }
       }, 5000);
+    }
+
+    // Add this new function to show tree details modal
+    function showTreeDetails(tree, area) {
+      // Ensure the modal markup exists
+      if (!document.getElementById('treeDetailsModal')) {
+        const modalHtml = `
+          <div id="treeDetailsModal" class="modal">
+            <div class="modal-content">
+              <span class="close-modal" onclick="document.getElementById('treeDetailsModal').style.display='none'">&times;</span>
+              <h2>Tree Details</h2>
+              <div id="treeDetailsContent"></div>
+            </div>
+          </div>
+        `;
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+      }
+      
+      // Populate modal with tree details
+      const content = document.getElementById('treeDetailsContent');
+      content.innerHTML = `
+        <div class="tree-details-container">
+          <div class="tree-detail-item">
+            <strong>Type:</strong> ${tree.type || 'Not specified'}
+          </div>
+          <div class="tree-detail-item">
+            <strong>Location:</strong> ${tree.lat.toFixed(6)}, ${tree.lng.toFixed(6)}
+          </div>
+          <div class="tree-detail-item">
+            <strong>Status:</strong> ${tree.status || 'Not specified'}
+          </div>
+          ${tree.endemic ? '<div class="tree-detail-item endemic"><strong>Endemic/Protected:</strong> Yes</div>' : ''}
+          ${tree.conservation_status ? `<div class="tree-detail-item"><strong>Conservation Status:</strong> ${tree.conservation_status}</div>` : ''}
+          <div class="tree-detail-item">
+            <strong>Added on:</strong> ${new Date(tree.created_at).toLocaleDateString()}
+          </div>
+          ${tree.description ? `<div class="tree-detail-item"><strong>Description:</strong> ${tree.description}</div>` : ''}
+          ${tree.photo_path ? `<div class="tree-image"><img src="${tree.photo_path}" alt="Tree Photo"></div>` : ''}
+        </div>
+      `;
+      
+      // Show the modal
+      document.getElementById('treeDetailsModal').style.display = 'block';
     }
   </script>
 </body>
